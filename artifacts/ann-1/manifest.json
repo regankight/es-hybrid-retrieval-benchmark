@@ -1,0 +1,64 @@
+{
+  "code": {
+    "commit": "030dcba67c2abe3d67e5d02b1adab4504223dd07",
+    "dirty": false
+  },
+  "compare": "artifacts/release-1",
+  "dataset": {
+    "archive_md5": "5f7d1de60b170fc8027bb7898e2efca1",
+    "name": "BEIR/SciFact",
+    "split": "test"
+  },
+  "environment": {
+    "cpu_count": 10,
+    "elasticsearch_client": "9.5.1",
+    "elasticsearch_server": "9.5.2",
+    "elasticsearch_started_utc": "2026-09-21T17:24:48+00:00",
+    "license": {
+      "expiry_date": "2026-10-01T13:44:13.738Z",
+      "status": "active",
+      "type": "trial"
+    },
+    "machine": "arm64",
+    "node": {
+      "allocated_processors": 10,
+      "arch": "aarch64",
+      "jvm_heap_max_bytes": 2147483648,
+      "jvm_version": "26.0.2",
+      "memory_total_bytes": 8319504384,
+      "os": "Red Hat Enterprise Linux 9.8 (Plow)"
+    },
+    "platform": "macOS-27.0-arm64-arm-64bit",
+    "python": "3.12.14"
+  },
+  "finished_utc": "2026-09-21T18:03:38+00:00",
+  "index": "scifact-benchmark-e5",
+  "index_documents": 5183,
+  "model": ".multilingual-e5-small-elasticsearch",
+  "modes": [
+    "dense",
+    "rrf"
+  ],
+  "note": "laptop, Docker Desktop, single node; embeddings cached during latency rounds",
+  "queries": 300,
+  "settings": {
+    "attempts": 3,
+    "candidates": [
+      20,
+      30,
+      50,
+      100,
+      200,
+      500,
+      1000,
+      10000
+    ],
+    "depth": 20,
+    "k": 10,
+    "latency_rounds": 3,
+    "rank_constant": 60,
+    "retry_delay": 5.0
+  },
+  "started_utc": "2026-09-21T18:02:42+00:00",
+  "tag": "ann-1"
+}

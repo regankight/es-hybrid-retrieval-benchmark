@@ -139,6 +139,22 @@ with a misleading error or reporting every document as failed without an attempt
 ranking depth come from the run, not from constants, so a run made with a different `--k` still
 renders, and a quality-only run renders without its latency section. Regenerating the committed report after that change produced byte-identical output.
 
+## Approximate search
+
+**The sweep uses an explicit `knn` query, not the plain `semantic` query.** `semantic` exposes no
+`num_candidates`. The `knn` retriever rejects `semantic_text` fields, so the RRF dense leg is a
+`knn` query inside a `standard` retriever. At small settings the explicit query returns the same
+top-10 as `semantic` on every query, which is how I know the two are comparable.
+
+**The reference is the largest setting Elasticsearch allows, and it is called that.** I did not
+prove it exact, so "ANN recall" is worded as overlap with the reference.
+
+**Latency is measured with the embedding cache warm, on purpose.** The quality pass embeds every
+query first, so the timed rounds see only the vector-search cost, which is the part
+`num_candidates` changes. Elasticsearch reports server time in whole milliseconds, so the client
+figure is the one to read. Setting order rotates per query and round, and a retried query is
+counted, as in the main latency phase.
+
 ## Reranking
 
 **The reranker runs offline, on saved candidates.** Elasticsearch's own reranker was impractical

@@ -207,8 +207,9 @@ def render_markdown(manifest: dict, summary: dict) -> str:
            f"Reference for ANN recall: `num_candidates` = {ref}, Elasticsearch's maximum; it is the "
            "largest setting available, not a proven-exact search.", "",
            "Latency is measured with every query embedding already cached, so it is vector-search cost only. "
-           f"{s['latency_rounds']} timed rounds over all queries; client-side milliseconds include the "
-           "network round trip.", "",
+           f"{s['latency_rounds']} timed rounds over all queries. Server-side time is reported by "
+           "Elasticsearch in whole milliseconds, so it cannot resolve differences below 1 ms; the client "
+           "column (which includes the network round trip) is the one to read.", "",
            f"Run window {manifest['started_utc']} to {manifest['finished_utc']}; code `{manifest['code']['commit'][:10]}`.", ""]
     for mode in MODES:
         out += [f"## {LABELS[mode]}", "",

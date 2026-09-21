@@ -92,6 +92,37 @@ different error profile, not a better one. Headroom is also small. RRF's recall 
 the cutoff and 0.880 across the whole 20-candidate pool, 33 queries have no relevant document
 anywhere in the pool, and only 12 have one beyond the cutoff that reranking could pull in.
 
+### Approximate-search effort: what `num_candidates` buys
+
+Dense search in Elasticsearch is approximate (HNSW), and `num_candidates` sets how many
+candidates it collects before returning the best few. [`ann_sweep.py`](ann_sweep.py) sweeps it
+from 20 to 10,000 (Elasticsearch's maximum, used as the reference) for dense-only and for RRF,
+whose dense leg is the same search ([`artifacts/ann-1`](artifacts/ann-1), full tables in its
+[report](artifacts/ann-1/report.md)). Latency here is vector-search cost only: every query
+embedding is already cached.
+
+| `num_candidates` | Dense top-10 overlap with reference | Dense nDCG@10 | Dense client p50 | RRF client p50 |
+|---|---|---|---|---|
+| 20, 30, 50 (identical results) | 0.978 (57 of 300 queries differ) | 0.6605 | 1.3 to 1.6 ms | 3.5 ms |
+| 100 | 0.989 (31 differ) | 0.6613 | 1.4 ms | 3.6 ms |
+| 500 | 0.999 (2 differ) | 0.6647 | 1.6 ms | 4.1 ms |
+| 1,000 | 1.000 (0 differ) | 0.6647 | 1.7 ms | 4.2 ms |
+| 10,000 (reference) | 1.000 | 0.6647 | 1.9 ms | 4.6 ms |
+
+- **The plain `semantic` query used everywhere else in this repo sits in the flat, low end.** Its
+  top-10 equals the `num_candidates` 20, 30 and 50 results on all 300 queries, so the main
+  benchmark's dense mode misses about 2% of the near-exact top-10 (RRF: 1.6%). I do not know why
+  20, 30 and 50 give identical results; I did not investigate.
+- **Buying that back is cheap here and changes no conclusion.** Near-exact recall (500 to 1,000)
+  costs up to about 0.4 ms for dense (1.3 to 1.6 ms becomes 1.6 to 1.7) and 0.6 to 0.7 ms for RRF (3.5 becomes 4.1 to 4.2). The nDCG@10 difference
+  between the default and the reference is -0.0042 for dense (paired 95% interval -0.0121 to
+  +0.0005) and -0.0002 for RRF (-0.0066 to +0.0063), so neither is distinguishable from zero.
+  nDCG is not monotone in recall either: RRF at 200 scored 0.6994 against 0.7024 at 1,000.
+- **What this does not show.** The corpus is 5,183 documents on one shard, so exhaustive-ish search
+  is nearly free, and the cost curve will not extrapolate to millions of vectors. The reference is
+  the largest setting Elasticsearch allows, not a proven-exact search. I did not test HNSW build
+  parameters, quantization, filtered kNN, or concurrent load.
+
 ## Findings that would change a decision
 
 1. **Errors are complementary, which is why fusion works.** BM25 beat the dense model on 66
@@ -171,6 +202,8 @@ artifacts contain rankings only, with no timings.
   "failures" are relevant documents that were never labeled, and absolute scores are
   conservative. For context, BEIR reports BM25 at 0.665 on SciFact (Table 2, nDCG@10); mine
   is 0.654. I did not investigate the difference (analyzer and query construction are likely).
+- **Approximate search is measured at one scale.** The `num_candidates` sweep covers a 5,183-document
+  index on one shard, so it says how the trade-off behaves here, not at production size.
 - **The dense model is small and untuned.** RRF's window and constant are defaults, not tuned.
   I did not verify whether Elasticsearch adds the `query:` and `passage:` prefixes that E5
   models expect; if it does not, the dense mode is understated.
@@ -202,7 +235,7 @@ Requires Python 3.12, Docker, and an Elasticsearch 9.5.x with machine learning e
 
 ```bash
 python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
-.venv/bin/python -m pytest                     # 194 offline unit tests; no Elasticsearch needed
+.venv/bin/python -m pytest                     # 211 offline unit tests; no Elasticsearch needed
 cp .env.example .env                           # set ES_PASSWORD, then:  set -a; source .env; set +a
 
 .venv/bin/python run_ingest.py --model e5      # about 95 minutes on my machine; resumable
@@ -216,6 +249,12 @@ downloaded and checksum-verified on first use):
 
 ```bash
 .venv/bin/python report.py artifacts/release-1 --rerank artifacts/rerank-1
+```
+
+The `num_candidates` sweep needs Elasticsearch; its report regenerates offline:
+
+```bash
+.venv/bin/python ann_sweep.py --report artifacts/ann-1 --compare artifacts/release-1
 ```
 
 The reranking stage runs from saved candidates and needs no Elasticsearch. It lives in its own
@@ -237,10 +276,11 @@ python3.12 -m venv .venv-rerank && .venv-rerank/bin/pip install -r requirements-
 | `benchmark.py`, `latency.py`, `run_benchmark.py` | The quality and latency phases and their CLI |
 | `rerank_offline.py` | Offline cross-encoder stage over saved candidates |
 | `report.py` | Report generator; works from artifacts alone |
+| `ann_sweep.py` | `num_candidates` sweep: approximate-search recall, quality and vector-search latency |
 | `resilience.py`, `environment.py`, `artifacts.py` | Retry policy, run provenance, on-disk format |
 | `provenance.py` | Release guards and run-directory hygiene; standard library only |
-| `artifacts/` | `release-1` (the results), `repro-1` (the repeat run), `rerank-1` |
-| `tests/` | 194 offline tests; behaviors that matter were checked by breaking the code and confirming a test fails |
+| `artifacts/` | `release-1` (the results), `repro-1` (the repeat run), `rerank-1`, `ann-1` (the sweep) |
+| `tests/` | 211 offline tests; behaviors that matter were checked by breaking the code and confirming a test fails |
 | [`docs/DESIGN_DECISIONS.md`](docs/DESIGN_DECISIONS.md) | The reasoning behind the choices above |
 
 ## License and attribution
