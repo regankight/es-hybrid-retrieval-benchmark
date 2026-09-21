@@ -1,145 +1,251 @@
-# ES Hybrid Retrieval Benchmark — does hybrid search, RRF, and reranking actually beat keyword search?
+# Hybrid retrieval on Elasticsearch: do fusion and reranking actually pay off?
 
-A small, reproducible benchmark of four Elasticsearch retrieval strategies on a real
-labeled dataset: BM25, semantic (`semantic_text` backed by the dense `multilingual-e5-small`
-model), RRF hybrid, and RRF plus a `text_similarity_reranker`. It reports retrieval quality *and* latency for each, so the
-answer to "is reranking worth it?" is a measured tradeoff instead of a demo.
+A measured comparison of four retrieval strategies on a labeled scientific-retrieval dataset
+(BEIR SciFact): keyword search (BM25), dense search, hybrid search fused with Reciprocal Rank
+Fusion (RRF), and hybrid plus a cross-encoder reranker. Every number below has a confidence
+interval, latency is measured on held-out queries so a cache cannot flatter it, and every
+result can be regenerated from the artifacts committed in this repository.
 
-This is a reference implementation and benchmark, not a production service.
+This is a reference implementation and benchmark, not a production service. The limits are
+stated in full below.
 
-**Status: work in progress.** The dataset loader, resumable ingestion, the four retrieval
-modes' query builders, the metrics, the quality and latency phases, and the artifact format are
-done and unit-tested, and the dense index holds the full corpus. The final benchmark run has
-not been made, so there are no published results yet, and none are claimed here.
+## Bottom line
 
-## Dataset
+**Recommendation: ship RRF hybrid (BM25 plus dense), and do not add an off-the-shelf reranker.**
 
-[SciFact](https://github.com/allenai/scifact) via the [BEIR](https://github.com/beir-cellar/beir)
-mirror: 5,183 scientific abstracts (about 202 words on average), 300 test queries, and 339
-relevance judgments. The loader downloads and verifies it; the data itself is not committed.
+- **Hybrid search is a real gain.** nDCG@10 goes from 0.654 (BM25) to 0.702 (RRF): a paired
+  difference of **+0.049, 95% CI [+0.028, +0.069]**. It also beats dense search alone by +0.042
+  [+0.015, +0.069]. Cost: about 82 ms on a cold query, 4 ms when the query embedding is cached.
+- **Dense search alone is no better than BM25 on this dataset.** +0.007 [-0.030, +0.044], with
+  69 queries won and 66 lost. That fits BEIR, where several dense models trail BM25 on SciFact
+  (for example TAS-B at 0.643 against BM25's 0.665).
+- **A small cross-encoder reranker adds cost without a measurable gain.** Reranking RRF's top 20
+  scores 0.694, a difference of -0.008 [-0.035, +0.020] from RRF, at +357 ms per query. It fixes
+  many of fusion's failures and breaks others, for no net change (details below).
+- **Latency numbers are easy to get wrong.** Elasticsearch caches query embeddings, so the same
+  query is about 45x faster the second time in the dense mode. My first version of this benchmark
+  reported the hybrid mode as faster than the dense search it contains. This one is built so
+  that cannot happen.
 
-Citations: Wadden et al., "Fact or Fiction: Verifying Scientific Claims" (EMNLP 2020);
-Thakur et al., "BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information
-Retrieval Models" (NeurIPS 2021, Datasets and Benchmarks).
+## Results
 
-## Design decisions
+Setup: 5,183 abstracts, 300 test queries with 339 relevance judgments, Elasticsearch 9.5.2 on an
+Apple-silicon laptop (Docker; 10 CPUs, about 8 GB), run on 2026-09-21. Intervals are 95%
+bootstrap intervals over queries (10,000 resamples, fixed seed). Source:
+[`artifacts/release-1/report.md`](artifacts/release-1/report.md).
 
-**The dataset is downloaded at runtime and checksum-verified, never committed.** Redistributing
-someone else's data invites license questions; downloading it does not. I read the original
-SciFact repo's `LICENSE.md`: the claim annotations are CC BY 4.0 and the abstracts are ODC-By 1.0,
-both permitting commercial use with attribution (hence the citations above). BEIR's own repackaging
-disclaims any license guarantee, so the verification is against the original, and attribution
-stays in this README.
+### Retrieval quality
 
-**Downloads land in a `.part` file and are promoted only after the MD5 matches.** A truncated or
-tampered download can never be mistaken for a valid archive, and a mismatch removes it rather than
-leaving it behind to fail confusingly on the next run. Extraction also refuses any archive member
-that would land outside the target directory (zip-slip).
+| Mode | nDCG@10 | Recall@10 | MRR@10 |
+|---|---|---|---|
+| BM25 | 0.654 [0.607, 0.698] | 0.784 [0.737, 0.828] | 0.620 [0.571, 0.668] |
+| Dense (`multilingual-e5-small`) | 0.661 [0.614, 0.705] | 0.775 [0.728, 0.820] | 0.633 [0.584, 0.681] |
+| **RRF hybrid** | **0.702** [0.659, 0.745] | **0.833** [0.790, 0.872] | **0.670** [0.623, 0.717] |
+| RRF + cross-encoder rerank | 0.694 [0.650, 0.736] | 0.827 [0.784, 0.866] | 0.661 [0.615, 0.707] |
 
-**The download function is injectable, so every test runs offline.** The loader takes a `fetch`
-callable; tests pass one that copies a tiny fixture archive. I mutation-checked the two behaviors
-that matter most (dropping zero-grade judgments, verifying the checksum) by breaking each in a
-scratch copy and confirming exactly one test fails.
+The per-mode intervals overlap heavily, which is exactly why the comparison that matters is
+paired: both modes are scored on the same queries, so a hard query is hard for both.
 
-**A small stdlib loader instead of the `beir` package.** The dataset is three plain files
-(`corpus.jsonl`, `queries.jsonl`, `qrels/test.tsv`). Parsing them takes about thirty lines, and
-skipping the dependency avoids pulling in a package for something this small and keeps the
-behavior easy to read end to end.
+### Is the difference real?
 
-**Queries are restricted to the chosen split, and zero-grade judgments are dropped.**
-`queries.jsonl` also holds queries from other splits that have no judgments here and can't be
-measured. A judgment of 0 means "judged not relevant" and must not be counted as relevant.
+Paired difference in mean nDCG@10 (candidate minus baseline), same 300 queries:
 
-**Configuration comes only from environment variables, with no implicit `.env` loading and no
-default for the password.** The password is excluded from `repr`, so it stays out of logs,
-tracebacks, and test output. `.env.example` is committed; `.env` is gitignored.
+| Candidate vs baseline | Difference [95% CI] | Excludes 0? | Wins | Losses | Ties |
+|---|---|---|---|---|---|
+| RRF vs BM25 | +0.049 [+0.028, +0.069] | yes | 78 | 32 | 190 |
+| RRF vs dense | +0.042 [+0.015, +0.069] | yes | 71 | 40 | 189 |
+| Dense vs BM25 | +0.007 [-0.030, +0.044] | no | 69 | 66 | 165 |
+| Rerank vs RRF | -0.008 [-0.035, +0.020] | no | 59 | 56 | 185 |
+| Rerank vs BM25 | +0.040 [+0.013, +0.069] | yes | 71 | 41 | 188 |
+| Rerank vs dense | +0.034 [+0.001, +0.066] | yes | 72 | 54 | 174 |
 
-**Python 3.12 is the target.** The optional LangChain integration's published support range tops
-out at 3.12 (per its PyPI page at time of writing), so the project targets 3.12 even though
-newer interpreters exist.
+### Latency
 
-**One index per semantic model, with one shard and no replicas.** Inference runs at index
-time and is slow on a laptop (measured on a 10-core Apple-silicon Mac, Elasticsearch in
-Docker: ELSER about 0.45 documents per second, dense `multilingual-e5-small` about 1.2 in a
-short test and 0.91 over the full run), so each model gets its own index. Ingesting one never
-re-runs the other, and either can be rebuilt alone. One shard on one node keeps BM25's term statistics identical across indices
-that hold the same documents.
+200 held-out queries per mode, each mode on its own disjoint slice (details under
+[How it was measured](#how-it-was-measured)). Client-side milliseconds; p50 with a 95% interval.
 
-**The semantic field is written directly as "title. abstract" instead of through
-`copy_to`.** It makes exactly what gets embedded explicit and matches the usual
-title-plus-abstract convention for this dataset. I did not test the `copy_to` alternative,
-so I make no claim about how it would behave.
+| Mode | Cold p50 | Cold p95 | Cached p50 | Cache speedup |
+|---|---|---|---|---|
+| BM25 | 3 [3, 4] | 5 | 3 | 1.3x |
+| Dense | 87 [84, 91] | 147 | 2 | 45.5x |
+| RRF hybrid | 82 [78, 91] | 140 | 4 | 20.9x |
+| Rerank stage, added on top of RRF | 357 [356, 358] | 373 | n/a | n/a |
 
-**Ingestion is resumable and idempotent, and only transient failures are retried.**
-Documents keep the dataset's own id, so re-ingesting overwrites instead of duplicating, and
-a re-run first skips everything already indexed: an interrupted multi-hour ingestion just
-continues. Retries with exponential backoff cover timeouts, 429s, and 502/503/504s. A 400 is
-reported immediately instead of being retried. These are not hypothetical: a cold-start 408
-and a first-ever-model-import 502 both happened during development.
+An identical repeat run ([`artifacts/repro-1`](artifacts/repro-1)), after another restart of
+Elasticsearch, produced **byte-identical rankings** for all three modes and cold medians within
+1 to 2 ms (dense 88, RRF 84). BM25 needs no embedding, so the cache barely touches it.
 
-**"Ready" means the model answered a real request.** With adaptive allocations a model sits
-at zero allocations until traffic arrives, so a `started` deployment in the stats API says
-nothing about whether the next request will succeed.
+### Reranking: who it helps and who it hurts
 
-**The retrieval modes share one candidate pool.** `window` is how deep each retriever looks
-for RRF and how many fused candidates the reranker re-orders, so RRF+rerank re-orders
-exactly what plain RRF ranked and the comparison isolates the reranker. Against the live
-index, a from-scratch recomputation of RRF (the sum of `1/(60 + rank)` over the BM25 and
-semantic lists) reproduced Elasticsearch's fused top 20 in the same order, with a maximum
-score difference of 2e-9. That was a sanity check on a partially built index, not a benchmark.
+The reranker (`cross-encoder/ms-marco-MiniLM-L-6-v2`, Apache-2.0, 22.7M parameters, run on CPU)
+re-scores the top 20 candidates that RRF saved. It is not Elastic's reranker (see
+[Findings](#findings-that-would-change-a-decision)); it is a different, much smaller model.
 
-**The reranker reads the `semantic` field (title and abstract), not `text`.** Elasticsearch
-accepts both and they rank differently. `semantic` matches what the embedding model sees.
-I have not measured which is better.
+| Queries where | n | RRF nDCG@10 | With rerank | Change |
+|---|---|---|---|---|
+| fusion did worse than the better single mode | 72 | 0.412 | 0.537 | **+0.125** |
+| fusion beat both single modes | 22 | 0.750 | 0.628 | **-0.122** |
+| RRF tied the better single mode | 206 | 0.799 | 0.756 | -0.043 |
 
-**ELSER was started and then dropped, and the semantic mode uses the dense model.** ELSER
-entered the plan because it was the default path in Elastic's own tutorial, not because it was
-weighed against the goal. Measured on this hardware it indexed at about 0.45 documents per
-second in isolation and about 0.17 in the real run, roughly 8 hours for the corpus, because the
-models compete for a small ML memory budget and the autoscaler could not add allocations. I
-stopped it at 560 of 5,183 documents. It is also Elastic-specific, while dense embeddings are the
-common case. So no ELSER results are reported here, and the partial ELSER index is unused.
+It repairs the queries where fusion went wrong and damages the ones fusion got right: a
+different error profile, not a better one. Headroom is also small. RRF's recall is 0.833 at
+the cutoff and 0.880 across the whole 20-candidate pool, 33 queries have no relevant document
+anywhere in the pool, and only 12 have one beyond the cutoff that reranking could pull in.
 
-**Metrics follow trec_eval conventions and evaluation is strict.** Linear gain, a
-`1/log2(rank + 1)` discount, and the cutoff applied before scoring keep numbers comparable
-with published BEIR results. A judged query that has no run raises an error instead of being
-skipped or scored zero, since either would quietly inflate the average. The implementations
-are checked against hand-computed values.
+## Findings that would change a decision
 
-**Latency is timed inside the retried call,** so backoff sleeps never leak into the figures
-(failed attempts are counted and flagged instead; see below). One caveat learned during
-development: rerank latency ranged from 1.8 to 19.6 seconds across a handful of runs while
-ingestion was competing for CPU and the adaptive scaler was changing allocations (the runs
-also used different rerank fields, so this is not a controlled comparison). Latency therefore
-has to be measured on an otherwise idle machine after warm-up.
+1. **Errors are complementary, which is why fusion works.** BM25 beat the dense model on 66
+   queries and the dense model beat BM25 on 69. Keyword search wins on rare entity names and
+   exact terms (a drug called "Tirasemtiv"); dense wins on paraphrase, misspellings, and
+   concept links ("one-child policy" finding a paper about rural China).
+2. **Fusion is not free.** RRF did worse than the better single mode on 72 queries (24%) and
+   better than both on 22 (7%). RRF rewards agreement over confidence, and with a window of 20
+   and rank constant 60 that is arithmetic: a document at rank 1 in one list scores 1/61
+   (0.0164), while a document at rank 20 in both scores 2/80 (0.025), so anything present in
+   both lists outranks anything present in only one. That this explains the 72 is my hypothesis,
+   from reading the worst cases. In the three worst, the dense model ranked the labeled paper
+   first while BM25 missed it or ranked it 15th, and documents at middling ranks in both lists
+   overtook it. That is a handful of cases, not a tested result.
+3. **Query-embedding caching dominates latency.** A cold query costs about 87 ms, almost all of
+   it embedding the query; a cached one costs about 2 ms. Any benchmark that lets two modes see
+   the same query text will reward whichever runs second.
+4. **Off-the-shelf reranking needs a reason.** A small cross-encoder trained on web passages
+   did not improve on fused SciFact results, and its errors mirror fusion's. The payoff is more
+   likely to come from a fine-tuned reranker, weighted fusion, or query routing. Choosing the
+   better of BM25 or dense per query *with hindsight* would score 0.754 against RRF's 0.702.
+   That needs the labels, so it is an upper bound, but it shows where the room is.
+5. **Elastic's built-in reranker was impractical on a small cluster.** In ad hoc tests during
+   development (not committed artifacts), `.rerank-v1` at one allocation took about 2.3 to 2.8 s
+   per candidate document, so a 20-candidate window (about 50 s) exceeds Elasticsearch's 30 s
+   search timeout. The ML memory budget (about 5.7 GB) was full of idle model deployments, which
+   blocked autoscaling; in a couple of earlier runs with more free headroom, warm queries took
+   roughly 2 to 7 s. This is a capacity-planning finding, not a verdict on the model.
 
-**Latency and quality are measured in separate phases, on different queries.** Elasticsearch
-caches query embeddings: in a probe on this setup the same text cost about 90 ms the first
-time and about 2 ms the second. An earlier version of this benchmark timed latency while
-scoring quality and reported RRF at 5 ms against 83 ms for the semantic search RRF contains,
-purely because RRF ran second. So latency now has its own phase. Each mode gets its own
-disjoint slice of real held-out queries (never scored, never seen by another mode), so every
+## How it was measured
+
+| | |
+|---|---|
+| Dataset | SciFact via BEIR: 5,183 abstracts (about 202 words), 300 test queries, 339 judgments |
+| Index | One shard, no replicas. `semantic_text` field backed by Elasticsearch's preconfigured `multilingual-e5-small` (384-dim, cosine), written as "title. abstract" |
+| Modes | BM25 (`multi_match` over title and text), dense (`semantic`), RRF (both; window 20, rank constant 60), RRF + reranker |
+| Quality | nDCG@10, Recall@10, MRR@10 with trec_eval conventions; a judged query missing from a run is an error, not a zero |
+| Statistics | Percentile bootstrap over queries; paired differences with win/loss/tie counts |
+| Latency | Separate phase on separate queries (below) |
+| Determinism | Rankings re-scored on a sample each run; identical across two full runs |
+| Provenance | Every run's manifest records code commit, versions, license type, and node hardware; publishing a run from a dirty working tree is refused |
+
+**Why latency has its own phase.** Each mode is timed on its own disjoint slice of real
+held-out queries (805 available, none scored, none sharing text with a scored query), so every
 mode pays full inference on its cold pass. A second pass over the same slice reports the
-cached figure as a separate number. Modes are interleaved query by query with a rotating
-order, so slow drift lands on every mode evenly. Quality artifacts hold rankings only, with no
-timings, and a test fails if latency ever appears there again. Limits: the slices differ
-between modes, so the intervals are unpaired, and a p95 from 100 samples is coarse.
+cached figure as a separate number. Modes are interleaved query by query in a rotating order so
+drift lands on every mode evenly. Elasticsearch is restarted before a latency run, because its
+embedding cache outlives a run. Quality artifacts contain rankings only, with no timings.
 
-**A query that needed a retry is reported, not absorbed.** Retries exist for cold-start
-blips. Against a saturated model they backfire: a timed-out rerank request keeps working
-server-side, so each retry queues more work behind it. That happened during development, when
-one probe sat retrying for 15 minutes. The retry budget is therefore small with a long backoff,
-every query records how many attempts it took, and a latency run that needed any retries is
-flagged as invalid, since timing only the successful attempt would hide the failures.
+## Engineering notes: failure modes I hit, and what now guards against them
 
-## Running the tests
+- **A contaminated cold pass.** A release run reused held-out queries from an earlier scratch
+  run. The cache still held them, so the dense mode read 28 ms [2, 61] instead of about 87.
+  The interval was the giveaway. Cold passes in which more than 5% of queries run at cached
+  speed are now flagged as invalid automatically, and the guard was verified against the real
+  contaminated data.
+- **Retries that made things worse.** A timed-out rerank request keeps running server-side, so
+  retrying queued more work behind a saturated model, and one probe sat stuck for 15 minutes.
+  Retry budgets are now small with long backoff, every query records its attempt count, and a
+  latency run that needed any retry is flagged invalid, because timing only the successful
+  attempt would hide the failures.
+- **A test double that encoded an assumption.** The environment collector assumed an API
+  returned memory figures it does not, and the fake I wrote for it agreed with the assumption,
+  so tests passed while the manifest silently lost the node's hardware. Validating the real
+  artifacts caught it. The fake now mirrors responses captured from a live cluster.
+
+## Limitations
+
+- **One dataset, one machine.** SciFact is a small scientific corpus; results may not transfer
+  to your data. Latency is single-user on a laptop running Elasticsearch in Docker, with no
+  concurrency or throughput testing.
+- **Intervals cover query sampling only.** They say nothing about corpus, model, or hardware
+  variation. Six comparisons are shown with no multiplicity correction.
+- **SciFact labels are sparse.** Most queries have one or two judged documents, so some
+  "failures" are relevant documents that were never labeled, and absolute scores are
+  conservative. For context, BEIR reports BM25 at 0.665 on SciFact (Table 2, nDCG@10); mine
+  is 0.654. I did not investigate the difference (analyzer and query construction are likely).
+- **The dense model is small and untuned.** RRF's window and constant are defaults, not tuned.
+  I did not verify whether Elasticsearch adds the `query:` and `passage:` prefixes that E5
+  models expect; if it does not, the dense mode is understated.
+- **The reranker is off-the-shelf, not fine-tuned, and not Elastic's.** One model, one pool
+  size (20), CPU only.
+- **ELSER was started and dropped.** It came in as the default path in Elastic's tutorial rather
+  than being weighed against the goal, and it indexed at about 0.17 documents per second in the
+  real run (roughly 8 hours), so no ELSER results are reported.
+- **License.** The ML-backed features ran on a 30-day trial license. I have not verified which
+  of them work on a free tier.
+
+## What production would need
+
+TLS and authentication (the local cluster ran without TLS); an ingestion pipeline with chunking
+for long documents and incremental updates; multi-node capacity planning for ML models (this
+project met the memory-budget and autoscaling limits at small scale); concurrency and
+throughput testing; online evaluation or A/B testing; retrieval-quality monitoring; index
+versioning and reindexing when the embedding model changes; and a cost model.
+
+**What I would do next:** weighted fusion or query routing (the hindsight gap above is the
+size of the prize), tune RRF's window and constant with cross-validation, try a fine-tuned or
+domain-adapted reranker, repeat on several BEIR datasets to test generality, and add a
+concurrency load test.
+
+## Reproduce
+
+Requires Python 3.12, Docker, and an Elasticsearch 9.5.x with machine learning enabled (I used
+[elastic-start-local](https://github.com/elastic/start-local), which starts a trial license).
 
 ```bash
-python3.12 -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest
+python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+.venv/bin/python -m pytest                     # 139 offline unit tests; no Elasticsearch needed
+cp .env.example .env                           # set ES_PASSWORD, then:  set -a; source .env; set +a
+
+.venv/bin/python run_ingest.py --model e5      # about 95 minutes on my machine; resumable
+# restart Elasticsearch here: its embedding cache outlives a run and would flatter latency
+.venv/bin/python run_benchmark.py --tag dev-mine --modes bm25 semantic rrf \
+    --latency-queries 200 --stability-sample 100   # tags starting "dev" are scratch and gitignored
 ```
 
-## License
+The committed artifacts let you regenerate the report **without Elasticsearch** (the dataset is
+downloaded and checksum-verified on first use):
 
-MIT — see `LICENSE`.
+```bash
+.venv/bin/python report.py artifacts/release-1 --rerank artifacts/rerank-1
+```
+
+The reranking stage runs from saved candidates and needs no Elasticsearch. It lives in its own
+environment so the main one stays light (it downloads PyTorch, about 127 MB, and a 91 MB model):
+
+```bash
+python3.12 -m venv .venv-rerank && .venv-rerank/bin/pip install -r requirements-rerank.txt
+.venv-rerank/bin/python rerank_offline.py --source artifacts/release-1 --tag dev-rerank
+```
+
+## Repository layout
+
+| Path | Purpose |
+|---|---|
+| `dataset.py` | Checksum-verified SciFact download and loader; held-out query set |
+| `indexing.py`, `run_ingest.py` | Index definition; resumable, idempotent ingestion |
+| `retrieval.py` | Request builders for the four modes, tested without a cluster |
+| `metrics.py`, `stats.py` | nDCG, recall, MRR; percentile and paired bootstrap |
+| `benchmark.py`, `latency.py`, `run_benchmark.py` | The quality and latency phases and their CLI |
+| `rerank_offline.py` | Offline cross-encoder stage over saved candidates |
+| `report.py` | Report generator; works from artifacts alone |
+| `resilience.py`, `environment.py`, `artifacts.py` | Retry policy, run provenance, on-disk format |
+| `artifacts/` | `release-1` (the results), `repro-1` (the repeat run), `rerank-1` |
+| `tests/` | 139 offline tests; behaviors that matter were checked by breaking the code and confirming a test fails |
+| [`docs/DESIGN_DECISIONS.md`](docs/DESIGN_DECISIONS.md) | The reasoning behind the choices above |
+
+## License and attribution
+
+MIT. Dataset: SciFact (Wadden et al., "Fact or Fiction: Verifying Scientific Claims", EMNLP
+2020), distributed through BEIR (Thakur et al., "BEIR: A Heterogeneous Benchmark for Zero-shot
+Evaluation of Information Retrieval Models", NeurIPS 2021, Datasets and Benchmarks). I checked
+the original SciFact repository's license: claim annotations are CC BY 4.0 and abstracts are
+ODC-By 1.0, both permitting commercial use with attribution. BEIR's repackaging disclaims any
+license guarantee, so the data is downloaded at runtime and never committed. The reranker model
+is Apache-2.0.
