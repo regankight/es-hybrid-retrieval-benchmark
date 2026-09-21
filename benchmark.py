@@ -24,6 +24,9 @@ class IndexIncomplete(RuntimeError):
 class BenchmarkSettings:
     k: int = 10
     window: int = 20
+    # Ranked ids saved per query. Later stages (an offline reranker) need candidates deeper
+    # than the metric cutoff; metrics are still cut at k, so nDCG@k does not change with depth.
+    depth: int = 20
     rank_constant: int = 60
     rerank_field: str = "semantic"
     stability_sample: int = 50  # queries re-run once to confirm rankings are deterministic
@@ -33,10 +36,14 @@ class BenchmarkSettings:
     attempts: int = 3
     retry_delay: float = 5.0
 
+    def __post_init__(self) -> None:
+        if not self.k <= self.depth <= self.window:
+            raise ValueError(f"need k ({self.k}) <= depth ({self.depth}) <= window ({self.window})")
 
-def request_options(settings: BenchmarkSettings) -> dict:
+
+def request_options(settings: BenchmarkSettings, *, size: int | None = None) -> dict:
     return dict(
-        size=settings.k,
+        size=settings.k if size is None else size,
         window=settings.window,
         rank_constant=settings.rank_constant,
         rerank_field=settings.rerank_field,
@@ -66,7 +73,7 @@ def measure_rankings(
 ) -> tuple[dict[str, list[str]], list[str]]:
     """Rank every query once. Returns the rankings plus the ids, among a re-run sample,
     whose ranking changed (approximate search can be non-deterministic; say so if it is)."""
-    options = request_options(settings)
+    options = request_options(settings, size=settings.depth)
 
     def rank(query: Query) -> list[str]:
         return run_query(client, index, mode, query, attempts=settings.attempts,

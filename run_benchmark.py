@@ -41,6 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", choices=sorted(MODELS), default="e5")
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--window", type=int, default=20)
+    parser.add_argument("--depth", type=int, default=None, help="ranked ids saved per query (default: window)")
     parser.add_argument("--rank-constant", type=int, default=60)
     parser.add_argument("--rerank-field", default="semantic")
     parser.add_argument("--warmup", type=int, default=5)
@@ -75,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         wait_for_inference(client, DEFAULT_RERANK_INFERENCE_ID, query="warm up")
 
     settings = BenchmarkSettings(
-        k=args.k, window=args.window, rank_constant=args.rank_constant,
+        k=args.k, window=args.window, depth=args.depth or args.window, rank_constant=args.rank_constant,
         rerank_field=args.rerank_field, stability_sample=args.stability_sample, warmup=args.warmup,
     )
     latency_settings = LatencySettings(per_mode=args.latency_queries, warmup=args.warmup)

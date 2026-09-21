@@ -91,7 +91,7 @@ def test_settings_reach_the_request_body(tmp_path):
     run_benchmark(client, "idx", ["rrf"], QUERIES, QRELS, settings(k=5, window=30, rank_constant=10),
                   tmp_path, sleep=NO_SLEEP, clock=StepClock())
     body = client.calls[0]
-    assert body["size"] == 5
+    assert body["size"] == 20  # the default depth: rankings are saved deeper than the cutoff k
     assert body["retriever"]["rrf"]["rank_window_size"] == 30
     assert body["retriever"]["rrf"]["rank_constant"] == 10
 
@@ -116,3 +116,21 @@ def test_the_retry_budget_setting_reaches_the_query():
         rank(client, attempts=2)  # a budget of 2 must give up on the second failure
     assert excinfo.value.status_code == 408
     assert len(client.calls) == 2
+
+
+def test_rankings_are_saved_to_depth_but_metrics_are_still_cut_at_k(tmp_path):
+    deep = ["x"] * 14 + ["a"]  # the relevant document sits at rank 15, beyond k=10
+    client = ScriptedSearchClient(lambda text, request: deep if text == "alpha" else ["b"])
+    summary = run_benchmark(client, "idx", ["bm25"], QUERIES, QRELS, settings(k=10, depth=20),
+                            tmp_path, sleep=NO_SLEEP, clock=StepClock())
+    assert client.calls[0]["size"] == 20
+    assert read_rankings(tmp_path, "bm25")["q1"] == deep  # candidates survive for later stages
+    assert summary["bm25"]["recall@10"] == pytest.approx(0.5)  # q1's hit at rank 15 does not count
+
+
+def test_depth_must_sit_between_k_and_window():
+    with pytest.raises(ValueError, match="depth"):
+        BenchmarkSettings(k=10, depth=5, window=20)
+    with pytest.raises(ValueError, match="depth"):
+        BenchmarkSettings(k=10, depth=30, window=20)
+    BenchmarkSettings(k=10, depth=10, window=10)
