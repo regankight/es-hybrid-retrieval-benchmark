@@ -128,6 +128,11 @@ def main(argv: list[str] | None = None) -> int:
             ci = f"[{c['p50_ci_low_ms']:.0f}, {c['p50_ci_high_ms']:.0f}]"
             print(f"  {mode:<11} {c['p50_ms']:>9.0f} {ci:>15} {c['p95_ms']:>9.0f} {w['p50_ms']:>11.0f} "
                   f"{m['cache_speedup_p50']:>7.1f}x")
+    if latency:
+        retried = {m: s["retried_queries"] for m, s in latency.items() if s["retried_queries"]}
+        if retried:
+            print(f"\nWARNING: latency queries needed retries {retried}. Those timings exclude the failed "
+                  "attempts, so treat this run as INVALID for latency.")
     print(f"\nartifacts written to {out_dir}")
     return 0
 

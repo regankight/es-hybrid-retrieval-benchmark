@@ -3,7 +3,7 @@ import pytest
 from artifacts import read_json, read_latency
 from benchmark import BenchmarkSettings
 from dataset import Query
-from fakes import ScriptedSearchClient, StepClock
+from fakes import ScriptedSearchClient, StepClock, api_error
 from latency import (
     LatencySettings,
     ModeLatency,
@@ -130,3 +130,13 @@ def test_run_latency_writes_a_summary_and_raw_per_mode_timings(tmp_path):
     assert on_disk["per_mode"] == 3 and on_disk["modes"]["rrf"]["cold"]["n"] == 3
     raw = read_latency(tmp_path, "semantic")
     assert len(raw["slice_query_ids"]) == 3 and len(raw["cold"]["wall_ms"]) == 3
+
+
+def test_retried_queries_are_counted_instead_of_silently_absorbed():
+    recorder = Recorder()
+    recorder.client.errors = [api_error(502)]  # the very first measured request fails once
+    latency = measure(recorder, per_mode=3, warmup=0)
+    assert latency["bm25"].retried == 1
+    assert latency["semantic"].retried == 0 and latency["rrf"].retried == 0
+    assert summarize_latency(latency["bm25"])["retried_queries"] == 1
+    assert summarize_latency(latency["rrf"])["retried_queries"] == 0

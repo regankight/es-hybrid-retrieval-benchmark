@@ -141,9 +141,12 @@ class ScriptedSearchClient:
         self.doc_count = doc_count
         self.took = took
         self.calls: list[dict] = []
+        self.errors: list[Exception] = []  # raised by successive searches, in order
 
     def search(self, **kwargs):
         self.calls.append(kwargs)
+        if self.errors:
+            raise self.errors.pop(0)
         ids = self.hits_for(query_text(kwargs), kwargs)
         return {"took": self.took, "hits": {"hits": [{"_id": i} for i in ids]}}
 

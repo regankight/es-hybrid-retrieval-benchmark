@@ -104,6 +104,25 @@ adaptive scaler was changing allocations (the runs also used different rerank fi
 this is not a controlled comparison). Latency therefore has to be measured on an otherwise
 idle machine after warm-up.
 
+**Latency and quality are measured in separate phases, on different queries.** Elasticsearch
+caches query embeddings: in a probe on this setup the same text cost about 90 ms the first
+time and about 2 ms the second. An earlier version of this benchmark timed latency while
+scoring quality and reported RRF at 5 ms against 83 ms for the semantic search RRF contains,
+purely because RRF ran second. So latency now has its own phase. Each mode gets its own
+disjoint slice of real held-out queries (never scored, never seen by another mode), so every
+mode pays full inference on its cold pass. A second pass over the same slice reports the
+cached figure as a separate number. Modes are interleaved query by query with a rotating
+order, so slow drift lands on every mode evenly. Quality artifacts hold rankings only, with no
+timings, and a test fails if latency ever appears there again. Limits: the slices differ
+between modes, so the intervals are unpaired, and a p95 from 100 samples is coarse.
+
+**A query that needed a retry is reported, not absorbed.** Retries exist for cold-start
+blips. Against a saturated model they backfire: a timed-out rerank request keeps working
+server-side, so each retry queues more work behind it. That happened during development, when
+one probe sat retrying for 15 minutes. The retry budget is therefore small with a long backoff,
+every query records how many attempts it took, and a latency run that needed any retries is
+flagged as invalid, since timing only the successful attempt would hide the failures.
+
 ## Running the tests
 
 ```bash

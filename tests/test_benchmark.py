@@ -11,7 +11,7 @@ from benchmark import (
     verify_index_complete,
 )
 from dataset import Query
-from fakes import ScriptedSearchClient, StepClock
+from fakes import ScriptedSearchClient, StepClock, api_error
 
 QUERIES = [Query("q1", "alpha"), Query("q2", "beta")]
 QRELS = {"q1": {"a": 1}, "q2": {"b": 1}}
@@ -107,3 +107,12 @@ def test_a_judged_query_missing_from_the_query_list_is_an_error_not_a_skip(tmp_p
     with pytest.raises(ValueError, match="no run"):
         run_benchmark(ScriptedSearchClient(hits), "idx", ["bm25"], QUERIES[:1], QRELS, settings(),
                       tmp_path, sleep=NO_SLEEP, clock=StepClock())
+
+
+def test_the_retry_budget_setting_reaches_the_query():
+    client = ScriptedSearchClient(hits)
+    client.errors = [api_error(408)] * 3
+    with pytest.raises(Exception) as excinfo:
+        rank(client, attempts=2)  # a budget of 2 must give up on the second failure
+    assert excinfo.value.status_code == 408
+    assert len(client.calls) == 2

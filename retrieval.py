@@ -94,6 +94,7 @@ class SearchRun:
     ranked_ids: list[str]
     took_ms: float  # server-side time reported by Elasticsearch
     wall_ms: float  # client-side time for the attempt that succeeded
+    attempts: int = 1  # more than 1 means earlier attempts failed and were retried
 
 
 def run_query(
@@ -102,23 +103,31 @@ def run_query(
     mode: str,
     query: Query,
     *,
+    attempts: int = 5,
+    base_delay: float = 2.0,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.perf_counter,
     **options,
 ) -> SearchRun:
     body = build_search_body(mode, query.text, **options)
 
+    tries = 0
+
     def attempt():
+        nonlocal tries
+        tries += 1
         started = clock()
         response = client.search(index=index, source=False, **body)
         return response, (clock() - started) * 1000
 
-    # Timing is taken inside the retried call so a retry's backoff sleep and the failed
-    # attempts never leak into the latency figures.
-    response, wall_ms = retry(attempt, sleep=sleep)
+    # Timing is taken inside the retried call so a retry's backoff sleep never leaks into
+    # the latency figure. That would hide failed attempts, so the count is returned and
+    # callers must surface it: a query that needed retries is not a clean measurement.
+    response, wall_ms = retry(attempt, attempts=attempts, base_delay=base_delay, sleep=sleep)
     return SearchRun(
         query_id=query.id,
         ranked_ids=[hit["_id"] for hit in response["hits"]["hits"]],
         took_ms=float(response["took"]),
         wall_ms=wall_ms,
+        attempts=tries,
     )

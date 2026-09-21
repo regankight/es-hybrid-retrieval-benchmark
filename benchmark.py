@@ -28,6 +28,10 @@ class BenchmarkSettings:
     rerank_field: str = "semantic"
     stability_sample: int = 50  # queries re-run once to confirm rankings are deterministic
     warmup: int = 5  # queries run first and discarded (connections, JIT)
+    # Retries suit a cold-start blip. Against a saturated model each retry queues more work
+    # behind the timed-out request, so the budget is small and the backoff long.
+    attempts: int = 3
+    retry_delay: float = 5.0
 
 
 def request_options(settings: BenchmarkSettings) -> dict:
@@ -65,7 +69,8 @@ def measure_rankings(
     options = request_options(settings)
 
     def rank(query: Query) -> list[str]:
-        return run_query(client, index, mode, query, sleep=sleep, clock=clock, **options).ranked_ids
+        return run_query(client, index, mode, query, attempts=settings.attempts,
+                         base_delay=settings.retry_delay, sleep=sleep, clock=clock, **options).ranked_ids
 
     for query in queries[: settings.warmup]:
         rank(query)  # discarded on purpose

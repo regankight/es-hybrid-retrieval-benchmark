@@ -50,6 +50,7 @@ class ModeLatency:
     cold_took_ms: list[float] = field(default_factory=list)
     warm_wall_ms: list[float] = field(default_factory=list)
     warm_took_ms: list[float] = field(default_factory=list)
+    retried: int = 0  # queries that needed more than one attempt: not clean measurements
 
 
 def build_latency_plan(
@@ -96,7 +97,8 @@ def measure_latency(
     request = request_options(options)
 
     def one(mode: str, query: Query):
-        return run_query(client, index, mode, query, sleep=sleep, clock=clock, **request)
+        return run_query(client, index, mode, query, attempts=options.attempts,
+                         base_delay=options.retry_delay, sleep=sleep, clock=clock, **request)
 
     for mode in modes:
         for query in plan.warmup:
@@ -107,6 +109,8 @@ def measure_latency(
         for round_index in range(settings.per_mode):
             for mode in rotated(modes, round_index):
                 run = one(mode, plan.slices[mode][round_index])
+                if run.attempts > 1:
+                    results[mode].retried += 1
                 getattr(results[mode], f"{phase}_wall_ms").append(run.wall_ms)
                 getattr(results[mode], f"{phase}_took_ms").append(run.took_ms)
     return results
@@ -126,7 +130,12 @@ def _phase(wall_ms: Sequence[float], took_ms: Sequence[float]) -> dict[str, floa
 def summarize_latency(latency: ModeLatency) -> dict:
     cold = _phase(latency.cold_wall_ms, latency.cold_took_ms)
     warm = _phase(latency.warm_wall_ms, latency.warm_took_ms)
-    return {"cold": cold, "warm": warm, "cache_speedup_p50": cold["p50_ms"] / warm["p50_ms"]}
+    return {
+        "cold": cold,
+        "warm": warm,
+        "cache_speedup_p50": cold["p50_ms"] / warm["p50_ms"],
+        "retried_queries": latency.retried,
+    }
 
 
 def run_latency(
@@ -146,6 +155,7 @@ def run_latency(
     for mode, latency in measured.items():
         write_latency(out_dir, mode, {
             "slice_query_ids": latency.query_ids,
+            "retried_queries": latency.retried,
             "cold": {"wall_ms": latency.cold_wall_ms, "took_ms": latency.cold_took_ms},
             "warm": {"wall_ms": latency.warm_wall_ms, "took_ms": latency.warm_took_ms},
         })

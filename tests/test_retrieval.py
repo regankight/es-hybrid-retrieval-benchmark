@@ -105,3 +105,20 @@ def test_a_permanent_error_is_not_retried():
     with pytest.raises(Exception) as excinfo:
         run_query(client, "idx", "bm25", Query("q", "t"), sleep=lambda s: None)
     assert excinfo.value.status_code == 400 and len(client.calls) == 1
+
+
+def test_a_clean_query_reports_one_attempt_and_a_retried_one_reports_more():
+    clean = run_query(FakeSearchClient(), "idx", "bm25", Query("q", "t"))
+    assert clean.attempts == 1
+    flaky = FakeSearchClient()
+    flaky.errors = [api_error(502)]
+    assert run_query(flaky, "idx", "bm25", Query("q", "t"), sleep=lambda s: None).attempts == 2
+
+
+def test_the_retry_budget_and_backoff_are_respected():
+    client, sleeps = FakeSearchClient(), []
+    client.errors = [api_error(408)] * 3
+    with pytest.raises(Exception) as excinfo:
+        run_query(client, "idx", "bm25", Query("q", "t"), attempts=2, base_delay=5.0, sleep=sleeps.append)
+    assert excinfo.value.status_code == 408
+    assert len(client.calls) == 2 and sleeps == [5.0]
