@@ -1,15 +1,16 @@
 # ES Hybrid Retrieval Benchmark — does hybrid search, RRF, and reranking actually beat keyword search?
 
 A small, reproducible benchmark of four Elasticsearch retrieval strategies on a real
-labeled dataset: BM25, semantic (`semantic_text`/ELSER), RRF hybrid, and RRF plus a
-`text_similarity_reranker`. It reports retrieval quality *and* latency for each, so the
+labeled dataset: BM25, semantic (`semantic_text` backed by the dense `multilingual-e5-small`
+model), RRF hybrid, and RRF plus a `text_similarity_reranker`. It reports retrieval quality *and* latency for each, so the
 answer to "is reranking worth it?" is a measured tradeoff instead of a demo.
 
 This is a reference implementation and benchmark, not a production service.
 
 **Status: work in progress.** The dataset loader, resumable ingestion, the four retrieval
-modes' query builders, and the metrics are done and unit-tested. Ingesting the full corpus
-and every benchmark run are still to do. There are no results yet, and none are claimed here.
+modes' query builders, the metrics, the quality and latency phases, and the artifact format are
+done and unit-tested, and the dense index holds the full corpus. The final benchmark run has
+not been made, so there are no published results yet, and none are claimed here.
 
 ## Dataset
 
@@ -59,9 +60,9 @@ newer interpreters exist.
 
 **One index per semantic model, with one shard and no replicas.** Inference runs at index
 time and is slow on a laptop (measured on a 10-core Apple-silicon Mac, Elasticsearch in
-Docker: ELSER about 0.45 documents per second, dense `multilingual-e5-small` about 1.2), so
-each model gets its own index. Ingesting one never re-runs the other, and either can be
-rebuilt alone. One shard on one node keeps BM25's term statistics identical across indices
+Docker: ELSER about 0.45 documents per second, dense `multilingual-e5-small` about 1.2 in a
+short test and 0.91 over the full run), so each model gets its own index. Ingesting one never
+re-runs the other, and either can be rebuilt alone. One shard on one node keeps BM25's term statistics identical across indices
 that hold the same documents.
 
 **The semantic field is written directly as "title. abstract" instead of through
@@ -91,18 +92,26 @@ score difference of 2e-9. That was a sanity check on a partially built index, no
 accepts both and they rank differently. `semantic` matches what the embedding model sees.
 I have not measured which is better.
 
+**ELSER was started and then dropped, and the semantic mode uses the dense model.** ELSER
+entered the plan because it was the default path in Elastic's own tutorial, not because it was
+weighed against the goal. Measured on this hardware it indexed at about 0.45 documents per
+second in isolation and about 0.17 in the real run, roughly 8 hours for the corpus, because the
+models compete for a small ML memory budget and the autoscaler could not add allocations. I
+stopped it at 560 of 5,183 documents. It is also Elastic-specific, while dense embeddings are the
+common case. So no ELSER results are reported here, and the partial ELSER index is unused.
+
 **Metrics follow trec_eval conventions and evaluation is strict.** Linear gain, a
 `1/log2(rank + 1)` discount, and the cutoff applied before scoring keep numbers comparable
 with published BEIR results. A judged query that has no run raises an error instead of being
 skipped or scored zero, since either would quietly inflate the average. The implementations
 are checked against hand-computed values.
 
-**Latency is timed inside the retried call,** so backoff sleeps and failed attempts never
-leak into the figures. One caveat learned during development: rerank latency ranged from 1.8
-to 19.6 seconds across a handful of runs while ingestion was competing for CPU and the
-adaptive scaler was changing allocations (the runs also used different rerank fields, so
-this is not a controlled comparison). Latency therefore has to be measured on an otherwise
-idle machine after warm-up.
+**Latency is timed inside the retried call,** so backoff sleeps never leak into the figures
+(failed attempts are counted and flagged instead; see below). One caveat learned during
+development: rerank latency ranged from 1.8 to 19.6 seconds across a handful of runs while
+ingestion was competing for CPU and the adaptive scaler was changing allocations (the runs
+also used different rerank fields, so this is not a controlled comparison). Latency therefore
+has to be measured on an otherwise idle machine after warm-up.
 
 **Latency and quality are measured in separate phases, on different queries.** Elasticsearch
 caches query embeddings: in a probe on this setup the same text cost about 90 ms the first
