@@ -26,9 +26,15 @@ from typing import Callable, Sequence
 from artifacts import write_json, write_latency
 from benchmark import BenchmarkSettings, request_options
 from dataset import Query
-from metrics import latency_summary
-from retrieval import run_query
+from metrics import latency_summary, percentile
+from retrieval import EMBEDDING_MODES, run_query
 from stats import bootstrap_median
+
+
+# A cold query counts as "cached-like" if it is no slower than this multiple of the cached
+# pass's p95. A genuinely cold embedding costs tens of milliseconds against a cached ~2.
+CACHED_LIKE_FACTOR = 3.0
+CONTAMINATION_TOLERANCE = 0.05
 
 
 @dataclass(frozen=True)
@@ -127,14 +133,26 @@ def _phase(wall_ms: Sequence[float], took_ms: Sequence[float]) -> dict[str, floa
     }
 
 
-def summarize_latency(latency: ModeLatency) -> dict:
+def cached_like_cold_queries(cold_wall_ms: Sequence[float], warm_wall_ms: Sequence[float]) -> int:
+    limit = percentile(warm_wall_ms, 95) * CACHED_LIKE_FACTOR
+    return sum(1 for value in cold_wall_ms if value <= limit)
+
+
+def summarize_latency(latency: ModeLatency, *, embeds_query: bool = False) -> dict:
+    """`embeds_query` says whether this mode pays the (cacheable) query-embedding cost. If it
+    does, cold queries as fast as cached ones mean the embedding cache already held them,
+    typically from an earlier run that used the same held-out queries, so the cold pass was
+    not cold. That once happened here; the run is flagged instead of trusted."""
     cold = _phase(latency.cold_wall_ms, latency.cold_took_ms)
     warm = _phase(latency.warm_wall_ms, latency.warm_took_ms)
+    cached_like = cached_like_cold_queries(latency.cold_wall_ms, latency.warm_wall_ms)
     return {
         "cold": cold,
         "warm": warm,
         "cache_speedup_p50": cold["p50_ms"] / warm["p50_ms"],
         "retried_queries": latency.retried,
+        "cached_like_cold_queries": cached_like,
+        "cache_contaminated": embeds_query and cached_like > CONTAMINATION_TOLERANCE * len(latency.cold_wall_ms),
     }
 
 
@@ -151,7 +169,10 @@ def run_latency(
     clock: Callable[[], float] = time.perf_counter,
 ) -> dict[str, dict]:
     measured = measure_latency(client, index, modes, pool, settings, options, sleep=sleep, clock=clock)
-    summary = {mode: summarize_latency(latency) for mode, latency in measured.items()}
+    summary = {
+        mode: summarize_latency(latency, embeds_query=mode in EMBEDDING_MODES)
+        for mode, latency in measured.items()
+    }
     for mode, latency in measured.items():
         write_latency(out_dir, mode, {
             "slice_query_ids": latency.query_ids,

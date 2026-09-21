@@ -130,6 +130,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {mode:<11} {c['p50_ms']:>9.0f} {ci:>15} {c['p95_ms']:>9.0f} {w['p50_ms']:>11.0f} "
                   f"{m['cache_speedup_p50']:>7.1f}x")
     if latency:
+        contaminated = {m: s["cached_like_cold_queries"] for m, s in latency.items() if s["cache_contaminated"]}
+        if contaminated:
+            print(f"\nWARNING: cold-pass queries ran at cached speed {contaminated}. Elasticsearch's embedding "
+                  "cache already held them, so this run is INVALID for latency. Restart Elasticsearch to clear "
+                  "the cache (or use unused held-out queries) and run again.")
         retried = {m: s["retried_queries"] for m, s in latency.items() if s["retried_queries"]}
         if retried:
             print(f"\nWARNING: latency queries needed retries {retried}. Those timings exclude the failed "

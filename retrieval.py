@@ -13,6 +13,8 @@ from dataset import Query
 from resilience import retry
 
 MODES = ("bm25", "semantic", "rrf", "rrf_rerank")
+# Modes that embed the query text, and so pay the embedding cost that Elasticsearch caches.
+EMBEDDING_MODES = frozenset({"semantic", "rrf", "rrf_rerank"})
 DEFAULT_RERANK_INFERENCE_ID = ".rerank-v1-elasticsearch"
 
 

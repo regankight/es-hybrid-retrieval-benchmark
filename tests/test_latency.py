@@ -140,3 +140,42 @@ def test_retried_queries_are_counted_instead_of_silently_absorbed():
     assert latency["semantic"].retried == 0 and latency["rrf"].retried == 0
     assert summarize_latency(latency["bm25"])["retried_queries"] == 1
     assert summarize_latency(latency["rrf"])["retried_queries"] == 0
+
+
+def _ml(cold, warm):
+    n = len(cold)
+    return ModeLatency(query_ids=[f"q{i}" for i in range(n)], cold_wall_ms=cold, cold_took_ms=[1.0] * n,
+                       warm_wall_ms=warm, warm_took_ms=[1.0] * n)
+
+
+def test_a_cold_pass_half_full_of_cached_speed_queries_is_flagged_as_contaminated():
+    # the exact shape release-1 had: half the "cold" queries were already in the cache
+    got = summarize_latency(_ml([2.0] * 10 + [90.0] * 10, [2.0] * 20), embeds_query=True)
+    assert got["cached_like_cold_queries"] == 10
+    assert got["cache_contaminated"] is True
+
+
+def test_a_genuinely_cold_pass_is_not_flagged():
+    got = summarize_latency(_ml([90.0] * 20, [2.0] * 20), embeds_query=True)
+    assert got["cached_like_cold_queries"] == 0 and got["cache_contaminated"] is False
+
+
+def test_a_mode_that_never_embeds_is_not_flagged_for_looking_cached():
+    # BM25 is legitimately as fast cold as cached; only embedding modes can be contaminated
+    got = summarize_latency(_ml([3.0] * 20, [2.0] * 20), embeds_query=False)
+    assert got["cached_like_cold_queries"] == 20 and got["cache_contaminated"] is False
+
+
+def test_a_stray_cached_query_within_tolerance_is_not_a_false_alarm():
+    got = summarize_latency(_ml([2.0] + [90.0] * 39, [2.0] * 40), embeds_query=True)  # 2.5% < 5%
+    assert got["cached_like_cold_queries"] == 1 and got["cache_contaminated"] is False
+
+
+def test_run_latency_applies_the_contamination_check_to_embedding_modes_only(tmp_path):
+    # Every query "costs" 2 ms cold and cached alike: what a fully contaminated cold pass looks like.
+    summary = run_latency(Recorder().client, "idx", MODES, POOL, LatencySettings(per_mode=10, warmup=1),
+                          BenchmarkSettings(), tmp_path, sleep=NO_SLEEP, clock=StepClock(0.002))
+    assert summary["bm25"]["cache_contaminated"] is False  # BM25 embeds nothing
+    assert summary["semantic"]["cache_contaminated"] is True
+    assert summary["rrf"]["cache_contaminated"] is True
+    assert read_json(tmp_path, "latency.json")["modes"]["semantic"]["cache_contaminated"] is True
