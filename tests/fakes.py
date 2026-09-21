@@ -120,3 +120,71 @@ class FakeSearchClient:
         if self.errors:
             raise self.errors.pop(0)
         return {"took": self.took, "hits": {"hits": [{"_id": h} for h in self.hits]}}
+
+
+def query_text(kwargs: dict) -> str:
+    """Dig the query text back out of whatever request body a mode produced."""
+    if "query" in kwargs:
+        query = kwargs["query"]
+        return (query.get("multi_match") or query["semantic"])["query"]
+    node = kwargs["retriever"]
+    if "text_similarity_reranker" in node:
+        node = node["text_similarity_reranker"]["retriever"]
+    return node["rrf"]["retrievers"][0]["standard"]["query"]["multi_match"]["query"]
+
+
+class ScriptedSearchClient:
+    """Answers each search by calling hits_for(query_text, request) -> list of doc ids."""
+
+    def __init__(self, hits_for, *, doc_count=0, took=5.0):
+        self.hits_for = hits_for
+        self.doc_count = doc_count
+        self.took = took
+        self.calls: list[dict] = []
+
+    def search(self, **kwargs):
+        self.calls.append(kwargs)
+        ids = self.hits_for(query_text(kwargs), kwargs)
+        return {"took": self.took, "hits": {"hits": [{"_id": i} for i in ids]}}
+
+    def count(self, index):
+        return {"count": self.doc_count}
+
+
+class StepClock:
+    """Each successive call returns a value `step` seconds later, so every timed
+    attempt (one call at start, one at end) measures exactly `step`."""
+
+    def __init__(self, step=0.01):
+        self.now, self.step = 0.0, step
+
+    def __call__(self):
+        self.now += self.step
+        return self.now
+
+
+class FakeEnvClient:
+    """Answers the handful of metadata calls collect_environment makes."""
+
+    def __init__(self, fail=()):
+        self.fail = set(fail)
+        self.license = self
+        self.nodes = self
+
+    def _maybe_fail(self, what):
+        if what in self.fail:
+            raise RuntimeError(f"{what} unavailable")
+
+    def info(self, **kwargs):
+        if "metric" in kwargs:  # nodes.info(metric=...)
+            self._maybe_fail("nodes")
+            return {"nodes": {"n1": {
+                "os": {"allocated_processors": 10, "mem": {"total_in_bytes": 8_000_000_000}},
+                "jvm": {"mem": {"heap_max_in_bytes": 2_000_000_000}},
+            }}}
+        self._maybe_fail("info")
+        return {"version": {"number": "9.5.2"}}
+
+    def get(self):  # license.get()
+        self._maybe_fail("license")
+        return {"license": {"type": "trial", "status": "active", "expiry_date": "2026-10-01"}}
