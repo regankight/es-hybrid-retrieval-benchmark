@@ -1,6 +1,7 @@
 """Offline report from saved artifacts: intervals, paired comparisons, failure analysis.
 
     python report.py artifacts/release-1            # writes artifacts/release-1/report.md
+    python report.py artifacts/release-1 --rerank artifacts/rerank-1     # adds the reranking section
 
 Needs no Elasticsearch: everything is derived from the run's rankings and latency files,
 which is the point of the artifact format. Bootstrap resamples use a fixed seed, so the
@@ -15,12 +16,13 @@ from typing import Mapping, Sequence
 
 from artifacts import read_json, read_rankings
 from dataset import Document, Query, load_scifact
-from metrics import per_query_scores
+from metrics import per_query_scores, recall_at_k
 from stats import Interval, bootstrap_mean, paired_difference
 
 TIE = 1e-9  # score differences smaller than this count as a tie
 MODES = ("bm25", "semantic", "rrf")
-LABELS = {"bm25": "BM25", "semantic": "Dense (e5)", "rrf": "RRF hybrid"}
+RERANK_MODE = "rrf_rerank_local"
+LABELS = {"bm25": "BM25", "semantic": "Dense (e5)", "rrf": "RRF hybrid", RERANK_MODE: "RRF + local rerank"}
 
 
 @dataclass(frozen=True)
@@ -81,6 +83,92 @@ def describe(query: Query, judged: Mapping[str, int], rankings: Mapping[str, Map
         "depth": len(next(iter(rankings.values()))[query.id]),
         "modes": per_mode,
     }
+
+
+def pool_ceiling(rankings: Mapping[str, Sequence[str]], qrels: Mapping[str, Mapping[str, int]],
+                 pool: int, k: int) -> dict:
+    """How much room a reranker over the top-`pool` candidates has: it can only reorder what
+    the first stage already retrieved."""
+    in_pool = {q: recall_at_k(rankings[q], qrels[q], pool) for q in qrels}
+    in_top = {q: recall_at_k(rankings[q], qrels[q], k) for q in qrels}
+    return {
+        "recall_at_k": sum(in_top.values()) / len(in_top),
+        "recall_at_pool": sum(in_pool.values()) / len(in_pool),
+        "none_in_pool": sum(v == 0 for v in in_pool.values()),
+        "rescuable": sum(1 for q in in_pool if in_pool[q] > 0 and in_top[q] == 0),
+    }
+
+
+def fusion_categories(scores: Mapping[str, Mapping[str, float]]) -> dict[str, list[str]]:
+    bm25, dense, rrf = scores["bm25"], scores["semantic"], scores["rrf"]
+    best = {q: max(bm25[q], dense[q]) for q in bm25}
+    return {
+        "fusion hurt (RRF below the better single mode)": [q for q in sorted(bm25) if best[q] - rrf[q] > TIE],
+        "fusion helped (RRF above both)": [q for q in sorted(bm25) if rrf[q] - best[q] > TIE],
+        "RRF tied the better single mode": [q for q in sorted(bm25) if abs(rrf[q] - best[q]) <= TIE],
+    }
+
+
+def breakdown(before: Mapping[str, float], after: Mapping[str, float],
+              categories: Mapping[str, Sequence[str]]) -> list[tuple[str, int, float, float]]:
+    """Mean score before and after within each category of query."""
+    return [(name, len(qs), sum(before[q] for q in qs) / len(qs), sum(after[q] for q in qs) / len(qs))
+            for name, qs in categories.items() if qs]
+
+
+def rerank_examples(before: Mapping[str, float], after: Mapping[str, float], per_category: int = 3) -> dict[str, list[str]]:
+    """Queries the reranker improved or damaged most. Deterministic: margin, then id."""
+    def top(margin) -> list[str]:
+        chosen = [q for q in sorted(before) if margin(q) > TIE]
+        return sorted(chosen, key=lambda q: (-margin(q), q))[:per_category]
+    return {"rerank_helps": top(lambda q: after[q] - before[q]), "rerank_hurts": top(lambda q: before[q] - after[q])}
+
+
+def render_rerank_section(info: dict) -> list[str]:
+    m, man = info["model"], info["manifest"]
+    out = ["", "## Reranking (offline cross-encoder over saved RRF candidates)", "",
+           f"Stage two of a two-stage pipeline: the top {man['candidates']} RRF candidates per query, saved in the source "
+           f"run, are re-scored on CPU with `{m['repo']}` (revision `{m['revision'][:10]}`, {m['license']}, "
+           f"{m['parameters'] / 1e6:.1f}M parameters, {m['torch_threads']} torch threads). This is NOT Elastic's reranker, "
+           f"which was unusable on this cluster. Source candidates verified by hash: `{man['source_rankings_sha256'][:12]}`. "
+           f"Code `{str(man['code']['commit'])[:10]}`.", "",
+           "| Mode | nDCG@10 | Recall@10 | MRR@10 |", "|---|---|---|---|"]
+    for name, row in (("RRF (same pool)", info["rrf_quality"]), (LABELS[RERANK_MODE], info["quality"])):
+        out.append(f"| {name} | {_ci(row['ndcg@10'])} | {_ci(row['recall@10'])} | {_ci(row['mrr@10'])} |")
+    out += ["", "| Candidate vs baseline | Difference [95% CI] | Excludes 0? | Wins | Losses | Ties |", "|---|---|---|---|---|---|"]
+    for c in info["comparisons"]:
+        out.append(f"| {LABELS[c.candidate]} vs {LABELS[c.baseline]} | {c.interval.estimate:+.4f} "
+                   f"[{c.interval.low:+.4f}, {c.interval.high:+.4f}] | {'yes' if c.interval.excludes_zero() else 'no'} "
+                   f"| {c.wins} | {c.losses} | {c.ties} |")
+    lat, ceil = info["latency"], info["ceiling"]
+    out += ["", f"**Cost.** Scoring {man['candidates']} candidates takes a median {lat['p50_ms']:.0f} ms per query "
+                f"[{lat['p50_ci_low_ms']:.0f}, {lat['p50_ci_high_ms']:.0f}], p95 {lat['p95_ms']:.0f} ms "
+                f"(about {lat['p50_ms'] / man['candidates']:.0f} ms per candidate), on top of retrieval. "
+                "There is no cache here: each query is scored fresh.", "",
+            f"**Headroom.** A reranker can only reorder what the first stage retrieved. RRF's recall is "
+            f"{ceil['recall_at_k']:.4f} at the cutoff and {ceil['recall_at_pool']:.4f} across the whole pool. "
+            f"{ceil['none_in_pool']} queries have no relevant document anywhere in the pool, and only "
+            f"{ceil['rescuable']} have one beyond the cutoff that reranking could pull in.", "",
+            "**Who it helps and who it hurts** (mean nDCG@10 by kind of query):", "",
+            "| Queries where | n | RRF | + rerank | Change |", "|---|---|---|---|---|"]
+    for name, n, before, after in info["breakdown"]:
+        out.append(f"| {name} | {n} | {before:.4f} | {after:.4f} | {after - before:+.4f} |")
+    out += ["", f"For reference, choosing the better of BM25 and dense per query with hindsight would score "
+                f"{info['oracle']:.4f}; that needs the labels, so it is an upper bound, not something achievable.", ""]
+    titles = {"rerank_helps": "Where reranking improved most", "rerank_hurts": "Where reranking damaged most"}
+    for key, label in titles.items():
+        out += [f"### {label}"]
+        for ex in info["examples"][key]:
+            out += ["", f"**Query {ex['id']}:** {ex['text']}", "", f"Relevant: {'; '.join(ex['relevant_titles'])}", "",
+                    "| Mode | First relevant rank | nDCG@10 | Top 3 retrieved |", "|---|---|---|---|"]
+            for mode in ("bm25", "semantic", "rrf", RERANK_MODE):
+                mm = ex["modes"][mode]
+                out.append(f"| {LABELS[mode]} | {mm['first_relevant_rank'] or '-'} | {mm['ndcg']:.3f} | "
+                           f"{' / '.join(t[:60] for t in mm['top3'])} |")
+        if not info["examples"][key]:
+            out += ["", "_none_"]
+        out.append("")
+    return out
 
 
 def _ci(interval: Interval, digits: int = 4) -> str:
@@ -160,7 +248,7 @@ def render_markdown(manifest: dict, quality: dict, comparisons: Sequence[Compari
 
 
 def build_report(run_dir: Path, corpus: Sequence[Document], queries: Sequence[Query],
-                 qrels: Mapping[str, Mapping[str, int]]) -> str:
+                 qrels: Mapping[str, Mapping[str, int]], rerank_dir: Path | None = None) -> str:
     manifest = read_json(run_dir, "manifest.json")
     latency = read_json(run_dir, "latency.json")
     k = manifest["settings"]["k"]
@@ -190,7 +278,33 @@ def build_report(run_dir: Path, corpus: Sequence[Document], queries: Sequence[Qu
         "fusion_helps": sum(ndcg["rrf"][q] - max(ndcg["bm25"][q], ndcg["semantic"][q]) > TIE for q in ndcg["bm25"]),
         "all_fail": sum(max(ndcg[m][q] for m in MODES) <= TIE for q in ndcg["bm25"]),
     }
-    return render_markdown(manifest, quality, comparisons, latency, categories, counts, len(ndcg["bm25"]))
+    text = render_markdown(manifest, quality, comparisons, latency, categories, counts, len(ndcg["bm25"]))
+    if rerank_dir is None:
+        return text
+    text = text.replace(f"`python report.py artifacts/{manifest['tag']}`",
+                        f"`python report.py artifacts/{manifest['tag']} --rerank artifacts/{rerank_dir.name}`", 1)
+
+    rr_manifest, rr_metrics = read_json(rerank_dir, "manifest.json"), read_json(rerank_dir, "metrics.json")
+    rankings[RERANK_MODE] = read_rankings(rerank_dir, RERANK_MODE)
+    per_query[RERANK_MODE] = per_query_scores(rankings[RERANK_MODE], qrels, k)
+    ndcg[RERANK_MODE] = per_query[RERANK_MODE][f"ndcg@{k}"]
+    pool = rr_manifest["candidates"]
+    pool_scores = per_query_scores({q: rankings["rrf"][q][:pool] for q in qrels}, qrels, k)
+    metric_ci = lambda scores: {m: bootstrap_mean(list(v.values())) for m, v in scores.items()}  # noqa: E731
+    info = {
+        "manifest": rr_manifest, "model": rr_manifest["model"],
+        "quality": metric_ci(per_query[RERANK_MODE]), "rrf_quality": metric_ci(pool_scores),
+        "comparisons": [compare(ndcg[b], ndcg[RERANK_MODE], b, RERANK_MODE) for b in ("rrf", "bm25", "semantic")],
+        "latency": read_json(rerank_dir, "latency.json"),
+        "ceiling": pool_ceiling(rankings["rrf"], qrels, pool, k),
+        "breakdown": breakdown(ndcg["rrf"], ndcg[RERANK_MODE], fusion_categories(ndcg)),
+        "oracle": sum(max(ndcg["bm25"][q], ndcg["semantic"][q]) for q in ndcg["bm25"]) / len(ndcg["bm25"]),
+        "examples": {
+            key: [describe(by_id[q], qrels[q], rankings, ndcg_by_mode(per_query, k), titles) for q in ids]
+            for key, ids in rerank_examples(ndcg["rrf"], ndcg[RERANK_MODE]).items()
+        },
+    }
+    return text + "\n".join(render_rerank_section(info)) + "\n"
 
 
 def ndcg_by_mode(per_query: Mapping[str, Mapping[str, Mapping[str, float]]], k: int) -> dict[str, dict[str, float]]:
@@ -201,10 +315,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--data-dir", default="data")
+    parser.add_argument("--rerank", type=Path, default=None, help="artifacts dir from rerank_offline.py")
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)
     dataset = load_scifact(args.data_dir)
-    report = build_report(args.run_dir, dataset.corpus, dataset.queries, dataset.qrels)
+    report = build_report(args.run_dir, dataset.corpus, dataset.queries, dataset.qrels, args.rerank)
     out = args.out or args.run_dir / "report.md"
     out.write_text(report, encoding="utf-8")
     print(f"wrote {out}")
