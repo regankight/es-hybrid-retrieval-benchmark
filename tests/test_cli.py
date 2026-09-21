@@ -99,3 +99,10 @@ def test_an_existing_run_is_refused_without_overwrite_and_is_not_destroyed_by_a_
 def test_a_tag_that_could_escape_the_artifacts_directory_is_refused(cli):
     with pytest.raises(SystemExit, match="invalid tag"):
         run_benchmark.main(["--tag", "../../elsewhere", "--overwrite"])
+
+
+@pytest.mark.parametrize("flags", [["--window", "5"], ["--k", "5", "--depth", "3"]])
+def test_inconsistent_settings_are_a_usage_error_before_any_request(cli, flags):
+    with pytest.raises(SystemExit) as excinfo:
+        run_benchmark.main(["--tag", "dev-x", *flags])
+    assert excinfo.value.code == 2  # not a traceback, and Boom (the client) was never reached

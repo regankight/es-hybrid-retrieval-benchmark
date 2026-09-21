@@ -240,3 +240,15 @@ def test_no_overlap_means_no_conflict_even_without_a_restart(tmp_path):
     _prior_run(tmp_path, "release-1", "2026-09-21T16:00:00+00:00", ["h1", "h2"])
     before = datetime(2026, 9, 21, 15, 0, tzinfo=timezone.utc)
     assert cache_conflicts(load_prior_runs(tmp_path, "new"), {"h8", "h9"}, before) == []
+
+
+def test_a_bm25_slice_never_counts_as_embedded_so_it_cannot_block_a_run(tmp_path):
+    run = tmp_path / "earlier"
+    (run / "latency").mkdir(parents=True)
+    (run / "manifest.json").write_text(json.dumps({"finished_utc": "2026-09-21T16:00:00+00:00"}))
+    (run / "latency" / "bm25.json").write_text(json.dumps({"slice_query_ids": ["h1"]}))
+    (run / "latency" / "rrf.json").write_text(json.dumps({"slice_query_ids": ["h2"]}))
+    prior = load_prior_runs(tmp_path, "new")
+    assert prior[0].query_ids == frozenset({"h2"})
+    before = datetime(2026, 9, 21, 15, 0, tzinfo=timezone.utc)
+    assert cache_conflicts(prior, {"h1"}, before) == []

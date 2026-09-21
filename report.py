@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from artifacts import LOCAL_RERANK_MODE, read_json, read_rankings
+from artifacts import LOCAL_RERANK_MODE, list_modes, read_json, read_rankings
 from dataset import Document, Query, load_scifact
 from metrics import per_query_scores, recall_at_k
 from stats import Interval, bootstrap_mean, paired_difference
@@ -179,7 +179,7 @@ def _ci(interval: Interval, digits: int = 4) -> str:
     return f"{interval.estimate:.{digits}f} [{interval.low:.{digits}f}, {interval.high:.{digits}f}]"
 
 
-def render_markdown(manifest: dict, quality: dict, comparisons: Sequence[Comparison], latency: dict,
+def render_markdown(manifest: dict, quality: dict, comparisons: Sequence[Comparison], latency: dict | None,
                     categories: dict[str, list[dict]], counts: dict[str, int], n_queries: int, depth: int) -> str:
     env, code = manifest["environment"], manifest["code"]
     k = manifest["settings"]["k"]
@@ -213,15 +213,16 @@ def render_markdown(manifest: dict, quality: dict, comparisons: Sequence[Compari
                    f"[{c.interval.low:+.4f}, {c.interval.high:+.4f}] | {'yes' if c.interval.excludes_zero() else 'no'} "
                    f"| {c.wins} | {c.losses} | {c.ties} |")
 
-    out += ["", "## Latency", "",
-            f"{latency['per_mode']} held-out queries per mode, each mode on its own disjoint slice, "
-            f"{latency['order']}. Client-side milliseconds; p50 with 95% bootstrap interval.", "",
-            "| Mode | Cold p50 [95% CI] | Cold p95 | Cached p50 | Cache speedup |", "|---|---|---|---|---|"]
-    for mode in MODES:
-        s = latency["modes"][mode]
-        c = s["cold"]
-        out.append(f"| {LABELS[mode]} | {c['p50_ms']:.0f} [{c['p50_ci_low_ms']:.0f}, {c['p50_ci_high_ms']:.0f}] "
-                   f"| {c['p95_ms']:.0f} | {s['warm']['p50_ms']:.0f} | {_speedup(s['cache_speedup_p50'])} |")
+    if latency is not None:  # a quality-only run has no latency phase
+        out += ["", "## Latency", "",
+                f"{latency['per_mode']} held-out queries per mode, each mode on its own disjoint slice, "
+                f"{latency['order']}. Client-side milliseconds; p50 with 95% bootstrap interval.", "",
+                "| Mode | Cold p50 [95% CI] | Cold p95 | Cached p50 | Cache speedup |", "|---|---|---|---|---|"]
+        for mode in MODES:
+            s = latency["modes"][mode]
+            c = s["cold"]
+            out.append(f"| {LABELS[mode]} | {c['p50_ms']:.0f} [{c['p50_ci_low_ms']:.0f}, {c['p50_ci_high_ms']:.0f}] "
+                       f"| {c['p95_ms']:.0f} | {s['warm']['p50_ms']:.0f} | {_speedup(s['cache_speedup_p50'])} |")
 
     titles = {
         "keyword_wins": "Where keyword search beat the dense model",
@@ -255,7 +256,11 @@ def render_markdown(manifest: dict, quality: dict, comparisons: Sequence[Compari
 def build_report(run_dir: Path, corpus: Sequence[Document], queries: Sequence[Query],
                  qrels: Mapping[str, Mapping[str, int]], rerank_dir: Path | None = None) -> str:
     manifest = read_json(run_dir, "manifest.json")
-    latency = read_json(run_dir, "latency.json")
+    latency = read_json(run_dir, "latency.json") if (run_dir / "latency.json").exists() else None
+    missing = [m for m in MODES if m not in list_modes(run_dir)]
+    if missing:
+        raise SystemExit(f"{run_dir} has no rankings for {', '.join(missing)}; the report compares bm25, "
+                         "semantic and rrf, so run all three")
     k = manifest["settings"]["k"]
     rankings = {mode: read_rankings(run_dir, mode) for mode in MODES}
     per_query = {mode: per_query_scores(rankings[mode], qrels, k) for mode in MODES}

@@ -32,7 +32,7 @@ from indexing import MODELS, index_name
 from latency import LatencySettings, build_latency_plan, cache_conflicts, load_prior_runs, run_latency
 from provenance import code_version, require_clean_for_release, reset_run_dir, resolve_run_dir
 from resilience import wait_for_inference
-from retrieval import DEFAULT_RERANK_INFERENCE_ID, MODES
+from retrieval import DEFAULT_RERANK_INFERENCE_ID, EMBEDDING_QUERY_MODES, MODES
 
 REPO = Path(__file__).resolve().parent
 # Elasticsearch's own reranker is opt-in: it needs ML memory headroom that a small cluster may
@@ -68,6 +68,16 @@ def _speedup(value: float | None) -> str:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
+    try:  # a bad combination of flags is a usage error, reported before any request is made
+        settings = BenchmarkSettings(
+            k=args.k, window=args.window, depth=args.window if args.depth is None else args.depth,
+            rank_constant=args.rank_constant, rerank_field=args.rerank_field,
+            stability_sample=args.stability_sample, warmup=args.warmup,
+        )
+    except ValueError as err:
+        build_parser().error(str(err))
+    latency_settings = LatencySettings(per_mode=args.latency_queries, warmup=args.warmup)
+
     cfg = Config.from_env()
     if not cfg.es_password:
         raise SystemExit("ES_PASSWORD is not set (see .env.example)")
@@ -81,19 +91,12 @@ def main(argv: list[str] | None = None) -> int:
     dataset = load_scifact(cfg.data_dir)
     index_docs = verify_index_complete(client, index, len(dataset.corpus))
 
-    settings = BenchmarkSettings(
-        k=args.k, window=args.window, depth=args.window if args.depth is None else args.depth,
-        rank_constant=args.rank_constant, rerank_field=args.rerank_field,
-        stability_sample=args.stability_sample, warmup=args.warmup,
-    )
-    latency_settings = LatencySettings(per_mode=args.latency_queries, warmup=args.warmup)
-
     cache_guard: dict = {"conflicts": [], "bypassed": False}
     if "latency" in args.phases:
         # Planned up front: fails fast if the held-out pool is too small, and tells us which
         # queries this run will embed so we can check none is already sitting in the cache.
         plan = build_latency_plan(dataset.heldout, args.modes, latency_settings)
-        planned = {q.id for mode in args.modes for q in plan.slices[mode]}
+        planned = {q.id for mode in args.modes if mode in EMBEDDING_QUERY_MODES for q in plan.slices[mode]}
         started = node_started_utc(client)
         conflicts = cache_conflicts(load_prior_runs(REPO / "artifacts", exclude_tag=args.tag), planned, started)
         cache_guard = {"elasticsearch_started_utc": started.isoformat(timespec="seconds"),

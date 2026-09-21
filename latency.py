@@ -29,7 +29,7 @@ from artifacts import write_json, write_latency
 from benchmark import BenchmarkSettings, request_options
 from dataset import Query
 from metrics import latency_summary, percentile
-from retrieval import CACHE_CHECKED_MODES, run_query
+from retrieval import CACHE_CHECKED_MODES, EMBEDDING_QUERY_MODES, run_query
 from stats import bootstrap_median
 
 
@@ -198,7 +198,7 @@ def run_latency(
 class PriorRun:
     tag: str
     finished: datetime
-    query_ids: frozenset[str]  # every held-out query this run embedded
+    query_ids: frozenset[str]  # every held-out query this run sent through an embedding model
 
 
 def load_prior_runs(artifacts_dir: str | Path, exclude_tag: str) -> list[PriorRun]:
@@ -212,7 +212,8 @@ def load_prior_runs(artifacts_dir: str | Path, exclude_tag: str) -> list[PriorRu
             continue
         ids: set[str] = set()
         for path in slice_files:
-            ids.update(json.loads(path.read_text(encoding="utf-8"))["slice_query_ids"])
+            if path.stem in EMBEDDING_QUERY_MODES:  # a BM25 slice never touched the cache
+                ids.update(json.loads(path.read_text(encoding="utf-8"))["slice_query_ids"])
         finished = json.loads(manifest_path.read_text(encoding="utf-8"))["finished_utc"]
         runs.append(PriorRun(run_dir.name, datetime.fromisoformat(finished), frozenset(ids)))
     return runs

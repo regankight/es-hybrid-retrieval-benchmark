@@ -202,7 +202,7 @@ Requires Python 3.12, Docker, and an Elasticsearch 9.5.x with machine learning e
 
 ```bash
 python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
-.venv/bin/python -m pytest                     # 189 offline unit tests; no Elasticsearch needed
+.venv/bin/python -m pytest                     # 194 offline unit tests; no Elasticsearch needed
 cp .env.example .env                           # set ES_PASSWORD, then:  set -a; source .env; set +a
 
 .venv/bin/python run_ingest.py --model e5      # about 95 minutes on my machine; resumable
@@ -240,7 +240,7 @@ python3.12 -m venv .venv-rerank && .venv-rerank/bin/pip install -r requirements-
 | `resilience.py`, `environment.py`, `artifacts.py` | Retry policy, run provenance, on-disk format |
 | `provenance.py` | Release guards and run-directory hygiene; standard library only |
 | `artifacts/` | `release-1` (the results), `repro-1` (the repeat run), `rerank-1` |
-| `tests/` | 189 offline tests; behaviors that matter were checked by breaking the code and confirming a test fails |
+| `tests/` | 194 offline tests; behaviors that matter were checked by breaking the code and confirming a test fails |
 | [`docs/DESIGN_DECISIONS.md`](docs/DESIGN_DECISIONS.md) | The reasoning behind the choices above |
 
 ## License and attribution

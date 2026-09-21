@@ -17,6 +17,8 @@ MODES = ("bm25", "semantic", "rrf", "rrf_rerank")
 # cached query is dramatically faster and a cold pass that is not slow can be recognized as
 # contaminated. rrf_rerank is deliberately absent: its rerank inference is not cached, so
 # its cold and cached passes look alike and the check would flag every valid run.
+# Modes that embed the query text, so the embedding cache can hold their queries (BM25 never does).
+EMBEDDING_QUERY_MODES = frozenset(MODES) - {"bm25"}
 CACHE_CHECKED_MODES = frozenset({"semantic", "rrf"})
 DEFAULT_RERANK_INFERENCE_ID = ".rerank-v1-elasticsearch"
 

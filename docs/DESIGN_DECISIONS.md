@@ -104,7 +104,7 @@ coarse.
 **The cache outlives a run, so the restart is enforced and contamination is detected.** Only a
 restart clears it. The runner reads Elasticsearch's process start time and every earlier run's
 held-out queries from `artifacts/`, and refuses to start a latency run if an earlier run embedded
-some of the same queries after that start (`--allow-warm-cache` overrides it and is recorded in the
+some of the same queries through an embedding model after that start (BM25 slices never count; `--allow-warm-cache` overrides it and is recorded in the
 manifest). As a backstop, a cold pass in which more than 5% of queries run at cached speed is
 flagged invalid. That backstop applies only to modes whose cold cost is dominated by the cacheable
 embedding (dense and RRF): for Elasticsearch's own reranker the rerank inference is not cached, so
@@ -132,12 +132,12 @@ are validated so a tag cannot point outside `artifacts/`.
 
 **A count of zero is an error, never "use the default".** Counts are validated at the command
 line, so `--depth 0` cannot silently become the window and `--limit 0` cannot silently ingest the
-whole corpus. Retry budgets below one are rejected where they are built, instead of failing later
+whole corpus. Inconsistent settings (for example a cutoff larger than the saved depth) are usage errors raised before any request. Retry budgets below one are rejected where they are built, instead of failing later
 with a misleading error or reporting every document as failed without an attempt.
 
 **The report makes no assumption about the cutoff.** Metric names, headings, and the saved
 ranking depth come from the run, not from constants, so a run made with a different `--k` still
-renders. Regenerating the committed report after that change produced byte-identical output.
+renders, and a quality-only run renders without its latency section. Regenerating the committed report after that change produced byte-identical output.
 
 ## Reranking
 

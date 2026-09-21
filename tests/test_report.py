@@ -209,3 +209,17 @@ def test_a_missing_cache_speedup_renders_as_not_available(tmp_path):
 def test_the_rerank_mode_name_is_shared_with_the_stage_that_writes_it():
     import rerank_offline
     assert RERANK_MODE == rerank_offline.MODE == "rrf_rerank_local"
+
+
+def test_a_quality_only_run_reports_without_a_latency_section(tmp_path):
+    _write_run(tmp_path)
+    (tmp_path / "latency.json").unlink()
+    text = build_report(tmp_path, CORPUS, QUERIES, QRELS)
+    assert "## Latency" not in text and "## Retrieval quality" in text
+
+
+def test_a_run_missing_a_mode_is_a_clear_error_not_a_traceback(tmp_path):
+    _write_run(tmp_path)
+    (tmp_path / "rankings" / "semantic.json").unlink()
+    with pytest.raises(SystemExit, match="no rankings for semantic"):
+        build_report(tmp_path, CORPUS, QUERIES, QRELS)
