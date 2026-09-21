@@ -39,6 +39,10 @@ class BenchmarkSettings:
     def __post_init__(self) -> None:
         if not self.k <= self.depth <= self.window:
             raise ValueError(f"need k ({self.k}) <= depth ({self.depth}) <= window ({self.window})")
+        if self.attempts < 1:
+            raise ValueError(f"attempts must be at least 1, got {self.attempts}")
+        if self.retry_delay < 0:
+            raise ValueError(f"retry_delay must not be negative, got {self.retry_delay}")
 
 
 def request_options(settings: BenchmarkSettings, *, size: int | None = None) -> dict:

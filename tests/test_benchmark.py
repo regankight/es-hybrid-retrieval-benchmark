@@ -134,3 +134,11 @@ def test_depth_must_sit_between_k_and_window():
     with pytest.raises(ValueError, match="depth"):
         BenchmarkSettings(k=10, depth=30, window=20)
     BenchmarkSettings(k=10, depth=10, window=10)
+
+
+def test_retry_settings_are_validated_when_the_settings_are_built():
+    with pytest.raises(ValueError, match="attempts"):
+        BenchmarkSettings(attempts=0)
+    with pytest.raises(ValueError, match="retry_delay"):
+        BenchmarkSettings(retry_delay=-1.0)
+    BenchmarkSettings(attempts=1, retry_delay=0.0)

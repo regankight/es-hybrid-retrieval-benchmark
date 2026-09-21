@@ -7,7 +7,6 @@ from indexing import document_source
 from rerank_offline import (
     MODE,
     SourceError,
-    passage,
     rerank,
     rerank_queries,
     run_rerank,
@@ -16,7 +15,7 @@ from rerank_offline import (
 )
 
 DOCS = [Document(f"d{i}", f"Title {i}", f"body {i}") for i in range(1, 7)]
-TEXTS = {d.id: passage(d) for d in DOCS}
+TEXTS = {d.id: d.passage() for d in DOCS}
 QUERIES = [Query("q1", "alpha"), Query("q2", "beta")]
 QRELS = {"q1": {"d3": 1}, "q2": {"d5": 1}}
 CANDIDATES = {"q1": ["d1", "d2", "d3", "d4"], "q2": ["d5", "d1", "d2", "d6"]}  # RRF put d3 third, d5 first
@@ -29,9 +28,12 @@ def scorer(prefers):
     return score
 
 
-def test_passage_matches_the_text_the_dense_model_was_indexed_with():
+def test_the_reranker_reads_the_text_the_dense_model_was_indexed_with():
+    # one definition (Document.passage) feeds both, so they cannot drift apart
     for doc in (Document("1", "A title", "the abstract"), Document("2", "", "no title here")):
-        assert passage(doc) == document_source(doc)["semantic"]
+        assert doc.passage() == document_source(doc)["semantic"]
+    assert Document("1", "A title", "the abstract").passage() == "A title. the abstract"
+    assert Document("2", "", "no title here").passage() == "no title here"
 
 
 def test_rerank_orders_best_first_and_preserves_every_candidate():

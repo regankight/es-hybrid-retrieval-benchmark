@@ -43,6 +43,8 @@ def retry(
     sleep: Callable[[float], None] = time.sleep,
 ) -> T:
     """Call `fn`, retrying only retryable errors, with exponential backoff between tries."""
+    if attempts < 1:
+        raise ValueError(f"attempts must be at least 1, got {attempts}")
     for attempt in range(1, attempts + 1):
         try:
             return fn()

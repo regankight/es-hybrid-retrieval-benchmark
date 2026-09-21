@@ -134,3 +134,8 @@ def test_ensure_index_refuses_an_index_built_for_another_model():
 def test_index_name_is_prefix_plus_model_key():
     assert index_name(Config(index_name="bench"), MODELS["elser"]) == "bench-elser"
     assert index_definition(MODELS["e5"])["mappings"]["properties"]["title"] == {"type": "text"}
+
+
+def test_indexing_with_no_attempts_is_refused_instead_of_reporting_every_document_as_failed():
+    with pytest.raises(ValueError, match="attempts must be at least 1"):
+        ingest(FakeClient(), INDEX, make_docs(2), attempts=0, sleep=lambda s: None)

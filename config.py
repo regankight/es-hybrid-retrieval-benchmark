@@ -3,6 +3,7 @@ no secret has a default: the password is optional here and required only where a
 authenticated connection is actually made."""
 from __future__ import annotations
 
+import argparse
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,3 +30,15 @@ class Config:
             index_name=env.get("INDEX_NAME", defaults.index_name),
             data_dir=Path(env.get("DATA_DIR", str(defaults.data_dir))),
         )
+
+
+def positive_int(text: str) -> int:
+    """argparse type for counts that must be at least 1. Rejects 0 loudly instead of letting
+    an `or default` downstream quietly turn an explicit 0 into the default."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not an integer") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{value} must be at least 1")
+    return value

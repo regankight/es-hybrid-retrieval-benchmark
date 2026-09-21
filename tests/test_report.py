@@ -2,6 +2,8 @@ import math
 
 import pytest
 
+from artifacts import read_json
+
 from artifacts import write_json, write_rankings
 from dataset import Document, Query
 from report import (RERANK_MODE, breakdown, build_report, compare, describe, fusion_categories,
@@ -73,6 +75,10 @@ def test_describe_reports_where_each_mode_ranked_the_first_relevant_document():
 def _write_run(run_dir):
     for mode, rankings in RANKINGS.items():
         write_rankings(run_dir, mode, rankings)
+    _write_run_metadata(run_dir)
+
+
+def _write_run_metadata(run_dir):
     node = {"allocated_processors": 10, "memory_total_bytes": 8 * 2**30, "os": "Linux", "arch": "aarch64"}
     write_json(run_dir, "manifest.json", {
         "tag": "test-run", "started_utc": "2026-01-01T00:00:00+00:00", "finished_utc": "2026-01-01T00:10:00+00:00",
@@ -163,3 +169,43 @@ def test_the_report_gains_a_reranking_section_when_given_a_rerank_run(tmp_path):
                    "`python report.py artifacts/test-run --rerank artifacts/rerank`"):
         assert needle in text, needle
     assert text == build_report(run, CORPUS, QUERIES, QRELS, rerank_dir)  # reproducible
+
+
+def test_a_run_made_with_a_cutoff_other_than_ten_reports_that_cutoff(tmp_path):
+    _write_run(tmp_path)
+    manifest = read_json(tmp_path, "manifest.json")
+    manifest["settings"]["k"] = 5
+    write_json(tmp_path, "manifest.json", manifest)
+    text = build_report(tmp_path, CORPUS, QUERIES, QRELS)  # used to raise KeyError: 'ndcg@10'
+    assert "nDCG@5" in text and "Recall@5" in text and "MRR@5" in text and "(nDCG@5 = 0)" in text
+    assert "@10" not in text
+
+
+def test_the_report_survives_a_run_where_a_leading_failure_category_is_empty(tmp_path):
+    # BM25 never beats the dense model here, so "keyword wins" is empty while others are not
+    # (this used to raise IndexError while building the failure-analysis header)
+    for mode, rankings in {**RANKINGS, "bm25": RANKINGS["semantic"]}.items():
+        write_rankings(tmp_path, mode, rankings)
+    _write_run_metadata(tmp_path)
+    text = build_report(tmp_path, CORPUS, QUERIES, QRELS)
+    assert "### Where keyword search beat the dense model\n\n_none_" in text
+    assert "### Where fusion beat both single modes" in text
+
+
+def test_the_saved_depth_in_the_report_is_the_real_ranking_depth(tmp_path):
+    _write_run(tmp_path)
+    assert "not in the saved top 4." in build_report(tmp_path, CORPUS, QUERIES, QRELS)
+
+
+def test_a_missing_cache_speedup_renders_as_not_available(tmp_path):
+    _write_run(tmp_path)
+    latency = read_json(tmp_path, "latency.json")
+    latency["modes"]["bm25"]["cache_speedup_p50"] = None
+    write_json(tmp_path, "latency.json", latency)
+    text = build_report(tmp_path, CORPUS, QUERIES, QRELS)
+    assert "| BM25 | 85 [80, 90] | 140 | 2 | n/a |" in text
+
+
+def test_the_rerank_mode_name_is_shared_with_the_stage_that_writes_it():
+    import rerank_offline
+    assert RERANK_MODE == rerank_offline.MODE == "rrf_rerank_local"

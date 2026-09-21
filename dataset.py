@@ -31,6 +31,10 @@ class Document:
     title: str
     text: str
 
+    def passage(self) -> str:
+        """Title and abstract joined: the one text the dense model embeds and the reranker reads."""
+        return f"{self.title}. {self.text}" if self.title else self.text
+
 
 @dataclass(frozen=True)
 class Query:

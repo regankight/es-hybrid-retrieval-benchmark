@@ -21,6 +21,9 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+# Mode name shared by the reranking stage that writes it and the report that reads it.
+LOCAL_RERANK_MODE = "rrf_rerank_local"
+
 
 def write_json(run_dir: Path, name: str, payload: Any) -> None:
     path = Path(run_dir) / name

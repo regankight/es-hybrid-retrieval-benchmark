@@ -12,21 +12,25 @@ import time
 
 from elasticsearch import Elasticsearch
 
-from config import Config
+from config import Config, positive_int
 from dataset import load_scifact
 from indexing import MODELS, ensure_index, index_name, ingest
 from resilience import wait_for_inference
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", choices=sorted(MODELS), required=True)
-    parser.add_argument("--batch-size", type=int, default=20)
+    parser.add_argument("--batch-size", type=positive_int, default=20)
     parser.add_argument(
-        "--limit", type=int,
-        help="index only the first N documents. For smoke tests: a subset is NOT a valid benchmark corpus.",
+        "--limit", type=positive_int, default=None,
+        help="index only the first N documents (N >= 1). For smoke tests: a subset is NOT a valid benchmark corpus.",
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
 
     cfg = Config.from_env()
     if not cfg.es_password:
@@ -36,8 +40,8 @@ def main(argv: list[str] | None = None) -> int:
     model = MODELS[args.model]
     name = index_name(cfg, model)
     corpus = load_scifact(cfg.data_dir).corpus
-    docs = corpus[: args.limit] if args.limit else corpus
-    subset = " (SUBSET, not a valid benchmark corpus)" if args.limit else ""
+    docs = corpus if args.limit is None else corpus[: args.limit]
+    subset = "" if args.limit is None else " (SUBSET, not a valid benchmark corpus)"
     print(f"{len(docs)} documents -> {name} on {cfg.es_url}{subset}")
 
     created = ensure_index(client, name, model)

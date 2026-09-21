@@ -13,8 +13,11 @@ from dataset import Query
 from resilience import retry
 
 MODES = ("bm25", "semantic", "rrf", "rrf_rerank")
-# Modes that embed the query text, and so pay the embedding cost that Elasticsearch caches.
-EMBEDDING_MODES = frozenset({"semantic", "rrf", "rrf_rerank"})
+# Modes whose cold cost is dominated by the query embedding that Elasticsearch caches, so a
+# cached query is dramatically faster and a cold pass that is not slow can be recognized as
+# contaminated. rrf_rerank is deliberately absent: its rerank inference is not cached, so
+# its cold and cached passes look alike and the check would flag every valid run.
+CACHE_CHECKED_MODES = frozenset({"semantic", "rrf"})
 DEFAULT_RERANK_INFERENCE_ID = ".rerank-v1-elasticsearch"
 
 

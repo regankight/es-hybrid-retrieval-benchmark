@@ -14,14 +14,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from artifacts import read_json, read_rankings
+from artifacts import LOCAL_RERANK_MODE, read_json, read_rankings
 from dataset import Document, Query, load_scifact
 from metrics import per_query_scores, recall_at_k
 from stats import Interval, bootstrap_mean, paired_difference
 
 TIE = 1e-9  # score differences smaller than this count as a tie
 MODES = ("bm25", "semantic", "rrf")
-RERANK_MODE = "rrf_rerank_local"
+RERANK_MODE = LOCAL_RERANK_MODE
 LABELS = {"bm25": "BM25", "semantic": "Dense (e5)", "rrf": "RRF hybrid", RERANK_MODE: "RRF + local rerank"}
 
 
@@ -125,16 +125,16 @@ def rerank_examples(before: Mapping[str, float], after: Mapping[str, float], per
 
 
 def render_rerank_section(info: dict) -> list[str]:
-    m, man = info["model"], info["manifest"]
+    m, man, k = info["model"], info["manifest"], info["k"]
     out = ["", "## Reranking (offline cross-encoder over saved RRF candidates)", "",
            f"Stage two of a two-stage pipeline: the top {man['candidates']} RRF candidates per query, saved in the source "
            f"run, are re-scored on CPU with `{m['repo']}` (revision `{m['revision'][:10]}`, {m['license']}, "
            f"{m['parameters'] / 1e6:.1f}M parameters, {m['torch_threads']} torch threads). This is NOT Elastic's reranker, "
            f"which was unusable on this cluster. Source candidates verified by hash: `{man['source_rankings_sha256'][:12]}`. "
            f"Code `{str(man['code']['commit'])[:10]}`.", "",
-           "| Mode | nDCG@10 | Recall@10 | MRR@10 |", "|---|---|---|---|"]
+           f"| Mode | nDCG@{k} | Recall@{k} | MRR@{k} |", "|---|---|---|---|"]
     for name, row in (("RRF (same pool)", info["rrf_quality"]), (LABELS[RERANK_MODE], info["quality"])):
-        out.append(f"| {name} | {_ci(row['ndcg@10'])} | {_ci(row['recall@10'])} | {_ci(row['mrr@10'])} |")
+        out.append(f"| {name} | {_ci(row[f'ndcg@{k}'])} | {_ci(row[f'recall@{k}'])} | {_ci(row[f'mrr@{k}'])} |")
     out += ["", "| Candidate vs baseline | Difference [95% CI] | Excludes 0? | Wins | Losses | Ties |", "|---|---|---|---|---|---|"]
     for c in info["comparisons"]:
         out.append(f"| {LABELS[c.candidate]} vs {LABELS[c.baseline]} | {c.interval.estimate:+.4f} "
@@ -149,7 +149,7 @@ def render_rerank_section(info: dict) -> list[str]:
             f"{ceil['recall_at_k']:.4f} at the cutoff and {ceil['recall_at_pool']:.4f} across the whole pool. "
             f"{ceil['none_in_pool']} queries have no relevant document anywhere in the pool, and only "
             f"{ceil['rescuable']} have one beyond the cutoff that reranking could pull in.", "",
-            "**Who it helps and who it hurts** (mean nDCG@10 by kind of query):", "",
+            f"**Who it helps and who it hurts** (mean nDCG@{k} by kind of query):", "",
             "| Queries where | n | RRF | + rerank | Change |", "|---|---|---|---|---|"]
     for name, n, before, after in info["breakdown"]:
         out.append(f"| {name} | {n} | {before:.4f} | {after:.4f} | {after - before:+.4f} |")
@@ -160,7 +160,7 @@ def render_rerank_section(info: dict) -> list[str]:
         out += [f"### {label}"]
         for ex in info["examples"][key]:
             out += ["", f"**Query {ex['id']}:** {ex['text']}", "", f"Relevant: {'; '.join(ex['relevant_titles'])}", "",
-                    "| Mode | First relevant rank | nDCG@10 | Top 3 retrieved |", "|---|---|---|---|"]
+                    f"| Mode | First relevant rank | nDCG@{k} | Top 3 retrieved |", "|---|---|---|---|"]
             for mode in ("bm25", "semantic", "rrf", RERANK_MODE):
                 mm = ex["modes"][mode]
                 out.append(f"| {LABELS[mode]} | {mm['first_relevant_rank'] or '-'} | {mm['ndcg']:.3f} | "
@@ -171,13 +171,18 @@ def render_rerank_section(info: dict) -> list[str]:
     return out
 
 
+def _speedup(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.1f}x"
+
+
 def _ci(interval: Interval, digits: int = 4) -> str:
     return f"{interval.estimate:.{digits}f} [{interval.low:.{digits}f}, {interval.high:.{digits}f}]"
 
 
 def render_markdown(manifest: dict, quality: dict, comparisons: Sequence[Comparison], latency: dict,
-                    categories: dict[str, list[dict]], counts: dict[str, int], n_queries: int) -> str:
+                    categories: dict[str, list[dict]], counts: dict[str, int], n_queries: int, depth: int) -> str:
     env, code = manifest["environment"], manifest["code"]
+    k = manifest["settings"]["k"]
     node = env.get("node", {})
     out = [f"# Report: {manifest['tag']}", ""]
     out += [
@@ -192,14 +197,14 @@ def render_markdown(manifest: dict, quality: dict, comparisons: Sequence[Compari
         f"| Note | {manifest['note']} |", "",
     ]
 
-    out += [f"## Retrieval quality ({n_queries} queries, cutoff {manifest['settings']['k']})", "",
+    out += [f"## Retrieval quality ({n_queries} queries, cutoff {k})", "",
             "Per-mode mean with 95% bootstrap interval over queries.", "",
-            "| Mode | nDCG@10 | Recall@10 | MRR@10 |", "|---|---|---|---|"]
+            f"| Mode | nDCG@{k} | Recall@{k} | MRR@{k} |", "|---|---|---|---|"]
     for mode, row in quality.items():
-        out.append(f"| {LABELS[mode]} | {_ci(row['ndcg@10'])} | {_ci(row['recall@10'])} | {_ci(row['mrr@10'])} |")
+        out.append(f"| {LABELS[mode]} | {_ci(row[f'ndcg@{k}'])} | {_ci(row[f'recall@{k}'])} | {_ci(row[f'mrr@{k}'])} |")
 
-    out += ["", "## Paired comparisons (nDCG@10)", "",
-            "Difference in mean nDCG@10 (candidate minus baseline) on the same queries. "
+    out += ["", f"## Paired comparisons (nDCG@{k})", "",
+            f"Difference in mean nDCG@{k} (candidate minus baseline) on the same queries. "
             "\"Wins\" and \"losses\" count queries whose score rose or fell. Three comparisons are "
             "shown with no multiplicity correction, and the intervals reflect query-sampling noise only.", "",
             "| Candidate vs baseline | Difference [95% CI] | Excludes 0? | Wins | Losses | Ties |", "|---|---|---|---|---|---|"]
@@ -216,19 +221,19 @@ def render_markdown(manifest: dict, quality: dict, comparisons: Sequence[Compari
         s = latency["modes"][mode]
         c = s["cold"]
         out.append(f"| {LABELS[mode]} | {c['p50_ms']:.0f} [{c['p50_ci_low_ms']:.0f}, {c['p50_ci_high_ms']:.0f}] "
-                   f"| {c['p95_ms']:.0f} | {s['warm']['p50_ms']:.0f} | {s['cache_speedup_p50']:.1f}x |")
+                   f"| {c['p95_ms']:.0f} | {s['warm']['p50_ms']:.0f} | {_speedup(s['cache_speedup_p50'])} |")
 
     titles = {
         "keyword_wins": "Where keyword search beat the dense model",
         "semantic_wins": "Where the dense model beat keyword search",
         "fusion_hurts": "Where fusion did worse than the better single mode",
         "fusion_helps": "Where fusion beat both single modes",
-        "all_fail": "Where every mode failed (nDCG@10 = 0)",
+        "all_fail": f"Where every mode failed (nDCG@{k} = 0)",
     }
     out += ["", "## Failure analysis", "",
             "Counts over all queries, then the largest cases in each category. "
             "Ranks are the position of the first relevant document; \"-\" means it was not in the saved top "
-            f"{next(iter(categories.values()))[0]['depth'] if any(categories.values()) else 20}.", "",
+            f"{depth}.", "",
             "| Category | Queries |", "|---|---|"]
     for key, label in titles.items():
         out.append(f"| {label} | {counts[key]} |")
@@ -239,7 +244,7 @@ def render_markdown(manifest: dict, quality: dict, comparisons: Sequence[Compari
         for ex in categories[key]:
             out += ["", f"**Query {ex['id']}:** {ex['text']}", "",
                     f"Relevant: {'; '.join(ex['relevant_titles'])}", "",
-                    "| Mode | First relevant rank | nDCG@10 | Top 3 retrieved |", "|---|---|---|---|"]
+                    f"| Mode | First relevant rank | nDCG@{k} | Top 3 retrieved |", "|---|---|---|---|"]
             for mode in MODES:
                 m = ex["modes"][mode]
                 out.append(f"| {LABELS[mode]} | {m['first_relevant_rank'] or '-'} | {m['ndcg']:.3f} | "
@@ -278,13 +283,14 @@ def build_report(run_dir: Path, corpus: Sequence[Document], queries: Sequence[Qu
         "fusion_helps": sum(ndcg["rrf"][q] - max(ndcg["bm25"][q], ndcg["semantic"][q]) > TIE for q in ndcg["bm25"]),
         "all_fail": sum(max(ndcg[m][q] for m in MODES) <= TIE for q in ndcg["bm25"]),
     }
-    text = render_markdown(manifest, quality, comparisons, latency, categories, counts, len(ndcg["bm25"]))
+    depth = len(next(iter(rankings["rrf"].values())))
+    text = render_markdown(manifest, quality, comparisons, latency, categories, counts, len(ndcg["bm25"]), depth)
     if rerank_dir is None:
         return text
     text = text.replace(f"`python report.py artifacts/{manifest['tag']}`",
                         f"`python report.py artifacts/{manifest['tag']} --rerank artifacts/{rerank_dir.name}`", 1)
 
-    rr_manifest, rr_metrics = read_json(rerank_dir, "manifest.json"), read_json(rerank_dir, "metrics.json")
+    rr_manifest = read_json(rerank_dir, "manifest.json")
     rankings[RERANK_MODE] = read_rankings(rerank_dir, RERANK_MODE)
     per_query[RERANK_MODE] = per_query_scores(rankings[RERANK_MODE], qrels, k)
     ndcg[RERANK_MODE] = per_query[RERANK_MODE][f"ndcg@{k}"]
@@ -292,7 +298,7 @@ def build_report(run_dir: Path, corpus: Sequence[Document], queries: Sequence[Qu
     pool_scores = per_query_scores({q: rankings["rrf"][q][:pool] for q in qrels}, qrels, k)
     metric_ci = lambda scores: {m: bootstrap_mean(list(v.values())) for m, v in scores.items()}  # noqa: E731
     info = {
-        "manifest": rr_manifest, "model": rr_manifest["model"],
+        "k": k, "manifest": rr_manifest, "model": rr_manifest["model"],
         "quality": metric_ci(per_query[RERANK_MODE]), "rrf_quality": metric_ci(pool_scores),
         "comparisons": [compare(ndcg[b], ndcg[RERANK_MODE], b, RERANK_MODE) for b in ("rrf", "bm25", "semantic")],
         "latency": read_json(rerank_dir, "latency.json"),

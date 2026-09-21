@@ -132,22 +132,24 @@ anywhere in the pool, and only 12 have one beyond the cutoff that reranking coul
 | Statistics | Percentile bootstrap over queries; paired differences with win/loss/tie counts |
 | Latency | Separate phase on separate queries (below) |
 | Determinism | Rankings re-scored on a sample each run; identical across two full runs |
-| Provenance | Every run's manifest records code commit, versions, license type, and node hardware; publishing a run from a dirty working tree is refused |
+| Provenance | Every run's manifest records code commit, versions, license type, and node hardware; publishing a run from a dirty working tree is refused, and so is a latency run if Elasticsearch has not restarted since an earlier run used the same held-out queries |
 
 **Why latency has its own phase.** Each mode is timed on its own disjoint slice of real
 held-out queries (805 available, none scored, none sharing text with a scored query), so every
 mode pays full inference on its cold pass. A second pass over the same slice reports the
 cached figure as a separate number. Modes are interleaved query by query in a rotating order so
 drift lands on every mode evenly. Elasticsearch is restarted before a latency run, because its
-embedding cache outlives a run. Quality artifacts contain rankings only, with no timings.
+embedding cache outlives a run, and the runner enforces it: it compares the node's start time with
+the earlier runs' held-out queries and refuses to start if a cache could still hold them. Quality
+artifacts contain rankings only, with no timings.
 
 ## Engineering notes: failure modes I hit, and what now guards against them
 
 - **A contaminated cold pass.** A release run reused held-out queries from an earlier scratch
   run. The cache still held them, so the dense mode read 28 ms [2, 61] instead of about 87.
   The interval was the giveaway. Cold passes in which more than 5% of queries run at cached
-  speed are now flagged as invalid automatically, and the guard was verified against the real
-  contaminated data.
+  speed are now flagged as invalid automatically (the guard was verified against the real
+  contaminated data), and a run that would reuse queries the cache still holds is refused up front.
 - **Retries that made things worse.** A timed-out rerank request keeps running server-side, so
   retrying queued more work behind a saturated model, and one probe sat stuck for 15 minutes.
   Retry budgets are now small with long backoff, every query records its attempt count, and a
@@ -200,11 +202,11 @@ Requires Python 3.12, Docker, and an Elasticsearch 9.5.x with machine learning e
 
 ```bash
 python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
-.venv/bin/python -m pytest                     # 139 offline unit tests; no Elasticsearch needed
+.venv/bin/python -m pytest                     # 189 offline unit tests; no Elasticsearch needed
 cp .env.example .env                           # set ES_PASSWORD, then:  set -a; source .env; set +a
 
 .venv/bin/python run_ingest.py --model e5      # about 95 minutes on my machine; resumable
-# restart Elasticsearch here: its embedding cache outlives a run and would flatter latency
+# restart Elasticsearch here: its embedding cache outlives a run (the runner refuses to start if you forget)
 .venv/bin/python run_benchmark.py --tag dev-mine --modes bm25 semantic rrf \
     --latency-queries 200 --stability-sample 100   # tags starting "dev" are scratch and gitignored
 ```
@@ -236,8 +238,9 @@ python3.12 -m venv .venv-rerank && .venv-rerank/bin/pip install -r requirements-
 | `rerank_offline.py` | Offline cross-encoder stage over saved candidates |
 | `report.py` | Report generator; works from artifacts alone |
 | `resilience.py`, `environment.py`, `artifacts.py` | Retry policy, run provenance, on-disk format |
+| `provenance.py` | Release guards and run-directory hygiene; standard library only |
 | `artifacts/` | `release-1` (the results), `repro-1` (the repeat run), `rerank-1` |
-| `tests/` | 139 offline tests; behaviors that matter were checked by breaking the code and confirming a test fails |
+| `tests/` | 189 offline tests; behaviors that matter were checked by breaking the code and confirming a test fails |
 | [`docs/DESIGN_DECISIONS.md`](docs/DESIGN_DECISIONS.md) | The reasoning behind the choices above |
 
 ## License and attribution

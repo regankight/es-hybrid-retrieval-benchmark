@@ -187,7 +187,8 @@ class FakeEnvClient:
                 "os": {"name": "Linux", "pretty_name": "Red Hat Enterprise Linux 9.8 (Plow)",
                        "arch": "aarch64", "version": "7.0.12-linuxkit",
                        "available_processors": 10, "allocated_processors": 10},
-                "jvm": {"version": "26.0.2", "vm_name": "OpenJDK 64-Bit Server VM", "mem": {}},
+                "jvm": {"version": "26.0.2", "vm_name": "OpenJDK 64-Bit Server VM", "mem": {},
+                        "start_time_in_millis": 1790006966317},
             }}}
         self._maybe_fail("info")
         return {"version": {"number": "9.5.2"}}

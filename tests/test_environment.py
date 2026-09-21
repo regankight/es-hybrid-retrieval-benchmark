@@ -1,6 +1,8 @@
 import subprocess
 
-from environment import code_version, collect_environment
+from datetime import datetime, timezone
+
+from environment import code_version, collect_environment, node_started_utc
 from fakes import FakeEnvClient
 
 
@@ -43,3 +45,20 @@ def test_code_version_reports_the_commit_and_whether_the_tree_is_dirty(tmp_path)
 
 def test_code_version_outside_a_repository_is_unknown_not_an_error(tmp_path):
     assert code_version(tmp_path) == {"commit": None, "dirty": None}
+
+
+def test_one_environment_snapshot_makes_a_single_license_call():
+    client, calls = FakeEnvClient(), {"n": 0}
+    original = client.get
+    def counting():
+        calls["n"] += 1
+        return original()
+    client.get = counting
+    collect_environment(client)
+    assert calls["n"] == 1  # it used to make three, one per field, so the fields could disagree
+
+
+def test_the_node_start_time_is_read_as_utc_and_recorded_in_the_environment():
+    expected = datetime.fromtimestamp(1790006966.317, tz=timezone.utc)
+    assert node_started_utc(FakeEnvClient()) == expected
+    assert collect_environment(FakeEnvClient())["elasticsearch_started_utc"] == expected.isoformat(timespec="seconds")

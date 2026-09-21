@@ -101,14 +101,43 @@ interleaved query by query with a rotating order so drift lands on every mode ev
 the slices differ between modes, so the intervals are unpaired, and a p95 from 200 samples is
 coarse.
 
-**The cache outlives a run, so it is detected and cleared.** A restart clears it. Embedding
-modes whose cold pass has more than 5% of queries at cached speed are flagged invalid.
+**The cache outlives a run, so the restart is enforced and contamination is detected.** Only a
+restart clears it. The runner reads Elasticsearch's process start time and every earlier run's
+held-out queries from `artifacts/`, and refuses to start a latency run if an earlier run embedded
+some of the same queries after that start (`--allow-warm-cache` overrides it and is recorded in the
+manifest). As a backstop, a cold pass in which more than 5% of queries run at cached speed is
+flagged invalid. That backstop applies only to modes whose cold cost is dominated by the cacheable
+embedding (dense and RRF): for Elasticsearch's own reranker the rerank inference is not cached, so
+cold and cached passes look alike and the check would flag every valid run. The restart guard is
+what protects that mode.
 
 **A query that needed a retry is reported, not absorbed.** Timing is taken inside the retried
 call so backoff sleeps never leak into the figures, which would also hide failed attempts. So
 every query records how many attempts it took and a latency run that needed any retry is
 flagged invalid. The retry budget is small with a long backoff, because a timed-out request
 against a saturated model keeps working server-side and each retry queues more behind it.
+
+**Elasticsearch's own reranker is opt-in.** The default modes are BM25, dense, and RRF. The
+reranker needs ML memory headroom this project's cluster lacked, and against a saturated model it
+times out; with retries that piles more work behind it.
+
+## Run hygiene and input validation
+
+**A run directory is reused only on request, and cleared only after everything else has passed.**
+An existing non-empty directory is refused unless `--overwrite` is given, because a run that
+crashed before writing its manifest leaves partial files that a later run must not merge with.
+With `--overwrite` the directory is emptied right before the first write, after the cluster,
+data, and guards have all checked out, so a failed start never destroys the previous run. Tags
+are validated so a tag cannot point outside `artifacts/`.
+
+**A count of zero is an error, never "use the default".** Counts are validated at the command
+line, so `--depth 0` cannot silently become the window and `--limit 0` cannot silently ingest the
+whole corpus. Retry budgets below one are rejected where they are built, instead of failing later
+with a misleading error or reporting every document as failed without an attempt.
+
+**The report makes no assumption about the cutoff.** Metric names, headings, and the saved
+ranking depth come from the run, not from constants, so a run made with a different `--k` still
+renders. Regenerating the committed report after that change produced byte-identical output.
 
 ## Reranking
 
@@ -118,8 +147,8 @@ one (retrieval) is captured in artifacts and stage two runs from them, so it kee
 without Elasticsearch, and it is a realistic architecture: reranking is often a separate
 service. The trade is that the model is not Elastic's, which the README says wherever it matters.
 
-**The reranker reads "title. abstract", the same text the dense model sees,** and is pinned to an
-exact model revision. Ties keep the incoming RRF order, so an uninformative reranker degrades to
+**The reranker reads "title. abstract", the same text the dense model sees** (one shared
+`Document.passage`, so the two cannot drift apart), and is pinned to an exact model revision. Ties keep the incoming RRF order, so an uninformative reranker degrades to
 plain RRF instead of shuffling it. Its output records a hash of the candidate file it consumed.
 
 ## Reproducibility and testing
@@ -141,4 +170,8 @@ index refused, retries respected, cold-cache detection, paired-difference sign, 
 and others) I broke the code in a scratch copy and confirmed a test failed. That is a manual
 practice, not a mutation-testing framework, and it found real gaps: a missing test that the
 latency phase turns the cache check on for embedding modes, and a test double that agreed with
-a wrong assumption about an API. Python 3.12 is simply the version this was built and tested on.
+a wrong assumption about an API. A later review pass of the finished code found further bugs
+(a report that crashed on an empty category or a non-default cutoff, a detector that would have
+flagged every valid rerank run, stale files surviving a rerun, and zero-valued flags read as
+unset); each fix has a regression test that fails when the fix is reverted. Python 3.12 is
+simply the version this was built and tested on.

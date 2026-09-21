@@ -88,3 +88,10 @@ def test_wait_for_inference_surfaces_permanent_errors_immediately():
         wait_for_inference(client, "missing", sleep=clock.sleep, clock=clock)
     assert excinfo.value.status_code == 404
     assert client.inference.calls == 1
+
+
+def test_a_retry_budget_below_one_is_a_clear_error_not_an_assertion():
+    with pytest.raises(ValueError, match="attempts must be at least 1"):
+        retry(lambda: 1, attempts=0)
+    with pytest.raises(ValueError, match="attempts must be at least 1"):
+        retry(lambda: 1, attempts=-3)

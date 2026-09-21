@@ -18,22 +18,23 @@ import argparse
 import hashlib
 import os
 import platform
-import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
-from artifacts import read_json, read_rankings, write_json, write_rankings
+from artifacts import LOCAL_RERANK_MODE, read_rankings, write_json, write_rankings
+from config import positive_int
 from dataset import Document, Query, load_scifact
 from metrics import evaluate, latency_summary
+from provenance import code_version, require_clean_for_release, reset_run_dir, resolve_run_dir
 from stats import bootstrap_median
 
 MODEL_REPO = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 MODEL_REVISION = "233902d25c440f23af6f7d6e94d2946bac0bee0a"  # pinned commit, Apache-2.0
 MAX_LENGTH = 512  # the model's position limit; the passage is truncated, never the query
-MODE = "rrf_rerank_local"
+MODE = LOCAL_RERANK_MODE
 
 # score(query, passages) -> one relevance score per passage. Injectable so tests need no model.
 Scorer = Callable[[str, Sequence[str]], list[float]]
@@ -41,12 +42,6 @@ Scorer = Callable[[str, Sequence[str]], list[float]]
 
 class SourceError(ValueError):
     """The source run cannot supply what reranking needs."""
-
-
-def passage(doc: Document) -> str:
-    """Title and abstract joined, exactly as indexing.document_source builds the text the
-    dense model sees (a test keeps the two in step), so every stage reads the same text."""
-    return f"{doc.title}. {doc.text}" if doc.title else doc.text
 
 
 def rerank(candidates: Sequence[str], scores: Sequence[float]) -> list[str]:
@@ -122,7 +117,7 @@ def run_rerank(
     source_rankings = read_rankings(source, "rrf")
     verify_source(source_rankings, queries, candidates)
     pool = {qid: ranked[:candidates] for qid, ranked in source_rankings.items()}
-    texts = {doc.id: passage(doc) for doc in corpus}
+    texts = {doc.id: doc.passage() for doc in corpus}
 
     rankings, millis, unstable = rerank_queries(
         queries, pool, texts, score, warmup=warmup, stability_sample=stability_sample, clock=clock
@@ -181,37 +176,29 @@ def load_cross_encoder(threads: int) -> tuple[Scorer, dict]:
     return score, info
 
 
-def _code_version(repo: Path) -> dict:
-    def git(*args: str) -> str:
-        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True).stdout.strip()
-
-    try:
-        return {"commit": git("rev-parse", "HEAD"), "dirty": bool(git("status", "--porcelain"))}
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return {"commit": None, "dirty": None}
-
-
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--source", type=Path, required=True, help="benchmark run holding rankings/rrf.json")
     parser.add_argument("--tag", required=True, help="output run name: artifacts/<tag>/")
-    parser.add_argument("--candidates", type=int, default=20)
-    parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument("--candidates", type=positive_int, default=20)
+    parser.add_argument("--threads", type=positive_int, default=4)
     parser.add_argument("--data-dir", default="data")
     parser.add_argument("--note", default="")
-    parser.add_argument("--overwrite", action="store_true")
-    args = parser.parse_args(argv)
+    parser.add_argument("--overwrite", action="store_true", help="replace an existing run with this tag")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
 
     repo = Path(__file__).resolve().parent
-    out_dir = repo / "artifacts" / args.tag
-    if (out_dir / "manifest.json").exists() and not args.overwrite:
-        raise SystemExit(f"{out_dir} already holds a run; pick a new --tag or pass --overwrite")
-    version = _code_version(repo)
-    if not args.tag.startswith("dev") and version["dirty"]:
-        raise SystemExit("working tree has uncommitted changes; commit first or use a dev* tag")
+    version = code_version(repo)
+    require_clean_for_release(args.tag, version)
+    out_dir = resolve_run_dir(repo / "artifacts", args.tag, overwrite=args.overwrite)
 
     dataset = load_scifact(args.data_dir)
     score, model_info = load_cross_encoder(args.threads)
+    reset_run_dir(out_dir)  # only after the model and data loaded: a failed start keeps the old run
     started = datetime.now(timezone.utc)
     print(f"reranking the top {args.candidates} RRF candidates for {len(dataset.queries)} queries "
           f"with {MODEL_REPO} on CPU ({model_info['torch_threads']} threads) ...", flush=True)

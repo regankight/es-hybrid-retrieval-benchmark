@@ -18,16 +18,18 @@ So the design removes the confound by construction:
 """
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Iterable, Sequence
 
 from artifacts import write_json, write_latency
 from benchmark import BenchmarkSettings, request_options
 from dataset import Query
 from metrics import latency_summary, percentile
-from retrieval import EMBEDDING_MODES, run_query
+from retrieval import CACHE_CHECKED_MODES, run_query
 from stats import bootstrap_median
 
 
@@ -138,9 +140,10 @@ def cached_like_cold_queries(cold_wall_ms: Sequence[float], warm_wall_ms: Sequen
     return sum(1 for value in cold_wall_ms if value <= limit)
 
 
-def summarize_latency(latency: ModeLatency, *, embeds_query: bool = False) -> dict:
-    """`embeds_query` says whether this mode pays the (cacheable) query-embedding cost. If it
-    does, cold queries as fast as cached ones mean the embedding cache already held them,
+def summarize_latency(latency: ModeLatency, *, check_cache: bool = False) -> dict:
+    """`check_cache` says whether the contamination check applies to this mode: it must be one
+    whose cold cost is dominated by the cacheable query embedding (CACHE_CHECKED_MODES). For such
+    a mode, cold queries as fast as cached ones mean the embedding cache already held them,
     typically from an earlier run that used the same held-out queries, so the cold pass was
     not cold. That once happened here; the run is flagged instead of trusted."""
     cold = _phase(latency.cold_wall_ms, latency.cold_took_ms)
@@ -149,10 +152,12 @@ def summarize_latency(latency: ModeLatency, *, embeds_query: bool = False) -> di
     return {
         "cold": cold,
         "warm": warm,
-        "cache_speedup_p50": cold["p50_ms"] / warm["p50_ms"],
+        # None, not a ZeroDivisionError, when the cached median is 0.0 ms (a coarse timer)
+        "cache_speedup_p50": cold["p50_ms"] / warm["p50_ms"] if warm["p50_ms"] > 0 else None,
         "retried_queries": latency.retried,
         "cached_like_cold_queries": cached_like,
-        "cache_contaminated": embeds_query and cached_like > CONTAMINATION_TOLERANCE * len(latency.cold_wall_ms),
+        "cache_check": check_cache,
+        "cache_contaminated": check_cache and cached_like > CONTAMINATION_TOLERANCE * len(latency.cold_wall_ms),
     }
 
 
@@ -170,7 +175,7 @@ def run_latency(
 ) -> dict[str, dict]:
     measured = measure_latency(client, index, modes, pool, settings, options, sleep=sleep, clock=clock)
     summary = {
-        mode: summarize_latency(latency, embeds_query=mode in EMBEDDING_MODES)
+        mode: summarize_latency(latency, check_cache=mode in CACHE_CHECKED_MODES)
         for mode, latency in measured.items()
     }
     for mode, latency in measured.items():
@@ -187,3 +192,36 @@ def run_latency(
         "modes": summary,
     })
     return summary
+
+
+@dataclass(frozen=True)
+class PriorRun:
+    tag: str
+    finished: datetime
+    query_ids: frozenset[str]  # every held-out query this run embedded
+
+
+def load_prior_runs(artifacts_dir: str | Path, exclude_tag: str) -> list[PriorRun]:
+    """Earlier latency runs found on disk (scratch runs included: their queries are just as
+    embedded), read from their manifests and per-mode slice files."""
+    runs: list[PriorRun] = []
+    for manifest_path in sorted(Path(artifacts_dir).glob("*/manifest.json")):
+        run_dir = manifest_path.parent
+        slice_files = sorted((run_dir / "latency").glob("*.json"))
+        if run_dir.name == exclude_tag or not slice_files:
+            continue
+        ids: set[str] = set()
+        for path in slice_files:
+            ids.update(json.loads(path.read_text(encoding="utf-8"))["slice_query_ids"])
+        finished = json.loads(manifest_path.read_text(encoding="utf-8"))["finished_utc"]
+        runs.append(PriorRun(run_dir.name, datetime.fromisoformat(finished), frozenset(ids)))
+    return runs
+
+
+def cache_conflicts(prior: Iterable[PriorRun], planned_ids: Iterable[str], es_started: datetime) -> list[str]:
+    """Tags of earlier runs that embedded some of the planned queries AFTER Elasticsearch last
+    started. Its embedding cache outlives a run and only a restart empties it, so those
+    queries would come back cached and flatter the cold pass. This enforces the restart
+    protocol instead of trusting an operator to remember it."""
+    planned = set(planned_ids)
+    return sorted(p.tag for p in prior if p.finished > es_started and p.query_ids & planned)

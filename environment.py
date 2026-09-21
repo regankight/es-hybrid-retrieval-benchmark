@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import os
 import platform
-import subprocess
-from pathlib import Path
+from datetime import datetime, timezone
 from typing import Callable
 
 import elasticsearch
+
+from provenance import code_version  # noqa: F401  (re-exported; lives in a dependency-free module)
 
 
 def _try(fn: Callable[[], object]) -> object:
@@ -35,6 +36,18 @@ def _node(client) -> dict:
     }
 
 
+def _license(client) -> dict:
+    license_info = client.license.get()["license"]  # one call: a snapshot, not three
+    return {key: license_info.get(key) for key in ("type", "status", "expiry_date")}
+
+
+def node_started_utc(client) -> datetime:
+    """When the Elasticsearch process started. Its query-embedding cache is empty at that moment
+    and only a restart empties it, so this is what tells us whether a cache can be trusted cold."""
+    node = next(iter(client.nodes.info(metric="jvm")["nodes"].values()))
+    return datetime.fromtimestamp(node["jvm"]["start_time_in_millis"] / 1000, tz=timezone.utc)
+
+
 def collect_environment(client) -> dict:
     return {
         "python": platform.python_version(),
@@ -43,27 +56,7 @@ def collect_environment(client) -> dict:
         "cpu_count": os.cpu_count(),
         "elasticsearch_client": elasticsearch.__versionstr__,
         "elasticsearch_server": _try(lambda: client.info()["version"]["number"]),
-        "license": _try(
-            lambda: {
-                key: client.license.get()["license"].get(key)
-                for key in ("type", "status", "expiry_date")
-            }
-        ),
+        "license": _try(lambda: _license(client)),
+        "elasticsearch_started_utc": _try(lambda: node_started_utc(client).isoformat(timespec="seconds")),
         "node": _try(lambda: _node(client)),
     }
-
-
-def code_version(repo_dir: str | Path) -> dict:
-    """Commit hash plus whether the tree had uncommitted changes. A dirty tree means the
-    numbers cannot be tied back to a commit, which a release run must not allow."""
-
-    def git(*args: str) -> str:
-        out = subprocess.run(
-            ["git", "-C", str(repo_dir), *args], capture_output=True, text=True, check=True
-        )
-        return out.stdout.strip()
-
-    try:
-        return {"commit": git("rev-parse", "HEAD"), "dirty": bool(git("status", "--porcelain"))}
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return {"commit": None, "dirty": None}

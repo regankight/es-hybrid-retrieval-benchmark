@@ -80,8 +80,7 @@ def ensure_index(client, name: str, model: SemanticModel) -> bool:
 
 def document_source(doc: Document) -> dict:
     # Title and abstract joined for the semantic side, the usual retrieval-benchmark convention.
-    semantic = f"{doc.title}. {doc.text}" if doc.title else doc.text
-    return {"title": doc.title, "text": doc.text, "semantic": semantic}
+    return {"title": doc.title, "text": doc.text, "semantic": doc.passage()}
 
 
 def _operations(index: str, docs) -> list[dict]:
@@ -112,6 +111,8 @@ def index_batch(
     Returns {doc id: reason} for documents that never made it in. Permanent failures
     (say, a 400) are reported immediately instead of being retried pointlessly.
     """
+    if attempts < 1:
+        raise ValueError(f"attempts must be at least 1, got {attempts}")
     pending = {doc.id: doc for doc in docs}
     failed: dict[str, str] = {}
     reasons: dict[str, str] = {}
