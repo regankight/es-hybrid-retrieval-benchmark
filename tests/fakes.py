@@ -178,15 +178,26 @@ class FakeEnvClient:
         if what in self.fail:
             raise RuntimeError(f"{what} unavailable")
 
+    # Response shapes below were copied from a live Elasticsearch 9.5.2 node, after an earlier
+    # version of this fake (built from an assumption) hid a real KeyError in the collector.
     def info(self, **kwargs):
-        if "metric" in kwargs:  # nodes.info(metric=...)
+        if "metric" in kwargs:  # nodes.info(metric=...): static facts, NO memory figures
             self._maybe_fail("nodes")
             return {"nodes": {"n1": {
-                "os": {"allocated_processors": 10, "mem": {"total_in_bytes": 8_000_000_000}},
-                "jvm": {"mem": {"heap_max_in_bytes": 2_000_000_000}},
+                "os": {"name": "Linux", "pretty_name": "Red Hat Enterprise Linux 9.8 (Plow)",
+                       "arch": "aarch64", "version": "7.0.12-linuxkit",
+                       "available_processors": 10, "allocated_processors": 10},
+                "jvm": {"version": "26.0.2", "vm_name": "OpenJDK 64-Bit Server VM", "mem": {}},
             }}}
         self._maybe_fail("info")
         return {"version": {"number": "9.5.2"}}
+
+    def stats(self, **kwargs):  # nodes.stats(metric=...): live memory and heap figures
+        self._maybe_fail("nodes")
+        return {"nodes": {"n1": {
+            "os": {"cpu": {"percent": 3}, "mem": {"total_in_bytes": 8_319_504_384}},
+            "jvm": {"mem": {"heap_max_in_bytes": 2_147_483_648}},
+        }}}
 
     def get(self):  # license.get()
         self._maybe_fail("license")

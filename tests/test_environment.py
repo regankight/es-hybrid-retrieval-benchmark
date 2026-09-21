@@ -9,9 +9,12 @@ def test_environment_captures_server_license_and_node_facts():
     assert env["elasticsearch_server"] == "9.5.2"
     assert env["license"] == {"type": "trial", "status": "active", "expiry_date": "2026-10-01"}
     assert env["node"] == {
+        "os": "Red Hat Enterprise Linux 9.8 (Plow)",
+        "arch": "aarch64",
         "allocated_processors": 10,
-        "memory_total_bytes": 8_000_000_000,
-        "jvm_heap_max_bytes": 2_000_000_000,
+        "memory_total_bytes": 8_319_504_384,  # from nodes.stats: nodes.info has no memory figures
+        "jvm_version": "26.0.2",
+        "jvm_heap_max_bytes": 2_147_483_648,
     }
     assert env["python"] and env["platform"] and env["cpu_count"]
 

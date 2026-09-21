@@ -20,12 +20,18 @@ def _try(fn: Callable[[], object]) -> object:
 
 
 def _node(client) -> dict:
-    nodes = client.nodes.info(metric="os,jvm")["nodes"]
-    node = next(iter(nodes.values()))
+    """Hardware as Elasticsearch sees it. Static facts (CPU count, OS) come from nodes.info;
+    memory and JVM heap come from nodes.stats, which is where the API actually puts them.
+    For a Dockerized node this is the Docker VM's view, not the host Mac's."""
+    info = next(iter(client.nodes.info(metric="os,jvm")["nodes"].values()))
+    stats = next(iter(client.nodes.stats(metric="os,jvm")["nodes"].values()))
     return {
-        "allocated_processors": node["os"]["allocated_processors"],
-        "memory_total_bytes": node["os"]["mem"]["total_in_bytes"],
-        "jvm_heap_max_bytes": node["jvm"]["mem"]["heap_max_in_bytes"],
+        "os": info["os"]["pretty_name"],
+        "arch": info["os"]["arch"],
+        "allocated_processors": info["os"]["allocated_processors"],
+        "memory_total_bytes": stats["os"]["mem"]["total_in_bytes"],
+        "jvm_version": info["jvm"]["version"],
+        "jvm_heap_max_bytes": stats["jvm"]["mem"]["heap_max_in_bytes"],
     }
 
 
