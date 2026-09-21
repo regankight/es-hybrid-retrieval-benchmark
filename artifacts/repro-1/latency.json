@@ -1,0 +1,79 @@
+{
+  "modes": {
+    "bm25": {
+      "cache_contaminated": false,
+      "cache_speedup_p50": 1.2644267347533253,
+      "cached_like_cold_queries": 200,
+      "cold": {
+        "mean_ms": 3.2089162347256206,
+        "n": 200,
+        "p50_ci_high_ms": 3.2881040024221875,
+        "p50_ci_low_ms": 3.0127709978842176,
+        "p50_ms": 3.1259789975592867,
+        "p95_ms": 4.448519401921658,
+        "server_p50_ms": 1.0
+      },
+      "retried_queries": 0,
+      "warm": {
+        "mean_ms": 2.5946235600713408,
+        "n": 200,
+        "p50_ci_high_ms": 2.5834584957920015,
+        "p50_ci_low_ms": 2.3333749995799735,
+        "p50_ms": 2.4722500020288862,
+        "p95_ms": 4.167434808186958,
+        "server_p50_ms": 1.0
+      }
+    },
+    "rrf": {
+      "cache_contaminated": false,
+      "cache_speedup_p50": 20.62307247327126,
+      "cached_like_cold_queries": 0,
+      "cold": {
+        "mean_ms": 89.85786722012563,
+        "n": 200,
+        "p50_ci_high_ms": 91.58610349550145,
+        "p50_ci_low_ms": 78.6840625005425,
+        "p50_ms": 83.91743699758081,
+        "p95_ms": 138.11031909208398,
+        "server_p50_ms": 81.5
+      },
+      "retried_queries": 0,
+      "warm": {
+        "mean_ms": 4.371625614730874,
+        "n": 200,
+        "p50_ci_high_ms": 4.234229003486689,
+        "p50_ci_low_ms": 3.879374999087304,
+        "p50_ms": 4.0691044996492565,
+        "p95_ms": 6.21666729930439,
+        "server_p50_ms": 2.0
+      }
+    },
+    "semantic": {
+      "cache_contaminated": false,
+      "cache_speedup_p50": 45.574662114828065,
+      "cached_like_cold_queries": 0,
+      "cold": {
+        "mean_ms": 92.04045354526897,
+        "n": 200,
+        "p50_ci_high_ms": 90.86695899895858,
+        "p50_ci_low_ms": 83.77220900729299,
+        "p50_ms": 88.20310450391844,
+        "p95_ms": 147.7176922984654,
+        "server_p50_ms": 86.0
+      },
+      "retried_queries": 0,
+      "warm": {
+        "mean_ms": 2.351628709511715,
+        "n": 200,
+        "p50_ci_high_ms": 1.984750502742827,
+        "p50_ci_low_ms": 1.8828330066753551,
+        "p50_ms": 1.9353539973963052,
+        "p95_ms": 3.362972911418183,
+        "server_p50_ms": 1.0
+      }
+    }
+  },
+  "order": "interleaved query by query, rotating each round",
+  "per_mode": 200,
+  "warmup": 5
+}

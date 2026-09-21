@@ -1,0 +1,70 @@
+{
+  "code": {
+    "commit": "9aa2cc5f8e9af92a15a526d9fdb86ecf8049cc4d",
+    "dirty": false
+  },
+  "dataset": {
+    "archive_md5": "5f7d1de60b170fc8027bb7898e2efca1",
+    "corpus_documents": 5183,
+    "heldout_pool": 805,
+    "name": "BEIR/SciFact",
+    "scored_queries": 300,
+    "source": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip",
+    "split": "test"
+  },
+  "environment": {
+    "cpu_count": 10,
+    "elasticsearch_client": "9.5.1",
+    "elasticsearch_server": "9.5.2",
+    "license": {
+      "expiry_date": "2026-10-01T13:44:13.738Z",
+      "status": "active",
+      "type": "trial"
+    },
+    "machine": "arm64",
+    "node": {
+      "allocated_processors": 10,
+      "arch": "aarch64",
+      "jvm_heap_max_bytes": 2147483648,
+      "jvm_version": "26.0.2",
+      "memory_total_bytes": 8319504384,
+      "os": "Red Hat Enterprise Linux 9.8 (Plow)"
+    },
+    "platform": "macOS-27.0-arm64-arm-64bit",
+    "python": "3.12.14"
+  },
+  "finished_utc": "2026-09-21T16:28:15+00:00",
+  "index": "scifact-benchmark-e5",
+  "index_documents": 5183,
+  "latency_settings": {
+    "per_mode": 200,
+    "warmup": 5
+  },
+  "models": {
+    "rerank": ".rerank-v1-elasticsearch",
+    "semantic": ".multilingual-e5-small-elasticsearch"
+  },
+  "modes": [
+    "bm25",
+    "semantic",
+    "rrf"
+  ],
+  "note": "repeat of release-1 to measure run-to-run variance: same code, same settings, same held-out queries, Elasticsearch restarted again first (cache cleared). Mac idle, on battery (Low Power Mode off).",
+  "phases": [
+    "quality",
+    "latency"
+  ],
+  "settings": {
+    "attempts": 3,
+    "depth": 20,
+    "k": 10,
+    "rank_constant": 60,
+    "rerank_field": "semantic",
+    "retry_delay": 5.0,
+    "stability_sample": 100,
+    "warmup": 5,
+    "window": 20
+  },
+  "started_utc": "2026-09-21T16:27:01+00:00",
+  "tag": "repro-1"
+}
