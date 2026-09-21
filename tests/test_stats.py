@@ -1,6 +1,6 @@
 import pytest
 
-from stats import Interval, bootstrap_mean, paired_difference
+from stats import Interval, bootstrap_mean, bootstrap_median, paired_difference
 
 FAST = dict(resamples=2000, seed=1)
 
@@ -70,3 +70,16 @@ def test_interval_helper():
     assert Interval(0.1, 0.02, 0.2).excludes_zero()
     assert Interval(-0.1, -0.2, -0.02).excludes_zero()
     assert not Interval(0.0, -0.1, 0.1).excludes_zero()
+
+
+def test_the_median_interval_is_robust_to_an_outlier_that_would_wreck_a_mean():
+    values = [10.0] * 30 + [10_000.0]
+    median = bootstrap_median(values, **FAST)
+    assert (median.estimate, median.low, median.high) == (10.0, 10.0, 10.0)
+    assert bootstrap_mean(values, **FAST).high > 100  # the mean is dragged far away
+
+
+def test_the_median_interval_brackets_the_estimate_for_noisy_data():
+    values = [float(v) for v in range(1, 40)]
+    got = bootstrap_median(values, **FAST)
+    assert got.estimate == 20.0 and got.low < 20.0 < got.high

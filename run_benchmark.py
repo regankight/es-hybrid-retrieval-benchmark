@@ -1,7 +1,11 @@
 """Run the benchmark against a built index and write artifacts/<tag>/.
 
     python run_benchmark.py --tag dev1 --modes bm25 semantic rrf
-    python run_benchmark.py --tag release-1 --repeats 3      # all four modes, from a clean commit
+    python run_benchmark.py --tag release-1                     # all four modes, both phases
+
+Two independent phases (see latency.py for why they must not share queries):
+  quality  rank the scored test queries with each mode and score them
+  latency  time each mode on its own disjoint held-out queries: cold, then cached
 
 Tags starting with "dev" are scratch runs (gitignored). Any other tag is meant to be
 committed, so it is refused unless the working tree is clean: a published number must be
@@ -22,6 +26,7 @@ from config import Config
 from dataset import SCIFACT_MD5, SCIFACT_URL, load_scifact
 from environment import code_version, collect_environment
 from indexing import MODELS, index_name
+from latency import LatencySettings, run_latency
 from resilience import wait_for_inference
 from retrieval import DEFAULT_RERANK_INFERENCE_ID, MODES
 
@@ -32,13 +37,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--tag", required=True, help="run name; becomes artifacts/<tag>/")
     parser.add_argument("--modes", nargs="+", choices=MODES, default=list(MODES))
+    parser.add_argument("--phases", nargs="+", choices=("quality", "latency"), default=["quality", "latency"])
     parser.add_argument("--model", choices=sorted(MODELS), default="e5")
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--window", type=int, default=20)
     parser.add_argument("--rank-constant", type=int, default=60)
     parser.add_argument("--rerank-field", default="semantic")
-    parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--warmup", type=int, default=5)
+    parser.add_argument("--stability-sample", type=int, default=50)
+    parser.add_argument("--latency-queries", type=int, default=100, help="held-out queries per mode")
     parser.add_argument("--note", default="", help="free text recorded in the manifest, e.g. machine load")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args(argv)
@@ -69,11 +76,19 @@ def main(argv: list[str] | None = None) -> int:
 
     settings = BenchmarkSettings(
         k=args.k, window=args.window, rank_constant=args.rank_constant,
-        rerank_field=args.rerank_field, repeats=args.repeats, warmup=args.warmup,
+        rerank_field=args.rerank_field, stability_sample=args.stability_sample, warmup=args.warmup,
     )
+    latency_settings = LatencySettings(per_mode=args.latency_queries, warmup=args.warmup)
     started = datetime.now(timezone.utc)
-    print(f"running {args.modes} on {index} ({len(dataset.queries)} queries, repeats={args.repeats}) ...", flush=True)
-    summary = run_benchmark(client, index, args.modes, dataset.queries, dataset.qrels, settings, out_dir)
+    quality = latency = None
+
+    if "quality" in args.phases:
+        print(f"quality: {args.modes} on {index} ({len(dataset.queries)} scored queries) ...", flush=True)
+        quality = run_benchmark(client, index, args.modes, dataset.queries, dataset.qrels, settings, out_dir)
+    if "latency" in args.phases:
+        print(f"latency: {args.latency_queries} held-out queries per mode, cold then cached "
+              f"(pool of {len(dataset.heldout)}) ...", flush=True)
+        latency = run_latency(client, index, args.modes, dataset.heldout, latency_settings, settings, out_dir)
 
     write_json(out_dir, "index.json", client.indices.get(index=index).body)
     write_json(out_dir, "manifest.json", {
@@ -81,26 +96,38 @@ def main(argv: list[str] | None = None) -> int:
         "started_utc": started.isoformat(timespec="seconds"),
         "finished_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "note": args.note,
+        "phases": args.phases,
         "index": index,
         "index_documents": index_docs,
         "modes": args.modes,
         "settings": asdict(settings),
+        "latency_settings": asdict(latency_settings),
         "dataset": {
             "name": "BEIR/SciFact", "split": "test", "source": SCIFACT_URL, "archive_md5": SCIFACT_MD5,
-            "corpus_documents": len(dataset.corpus), "queries": len(dataset.queries),
+            "corpus_documents": len(dataset.corpus), "scored_queries": len(dataset.queries),
+            "heldout_pool": len(dataset.heldout),
         },
         "models": {"semantic": model.inference_id, "rerank": DEFAULT_RERANK_INFERENCE_ID},
         "code": version,
         "environment": collect_environment(client),
     })
 
-    print(f"\n{'mode':<11} {'nDCG@'+str(args.k):>8} {'recall@'+str(args.k):>10} {'MRR@'+str(args.k):>8} {'p50 ms':>8} {'p95 ms':>8}")
-    for mode, m in summary.items():
-        print(f"{mode:<11} {m[f'ndcg@{args.k}']:>8.4f} {m[f'recall@{args.k}']:>10.4f} {m[f'mrr@{args.k}']:>8.4f} "
-              f"{m['p50_ms']:>8.0f} {m['p95_ms']:>8.0f}")
-    unstable = {m: len(s["unstable_query_ids"]) for m, s in summary.items() if s["unstable_query_ids"]}
-    if unstable:
-        print(f"\nNOTE: rankings changed between repeats for {unstable}")
+    if quality:
+        print(f"\nQUALITY  ({len(dataset.queries)} queries)")
+        print(f"  {'mode':<11} {'nDCG@'+str(args.k):>8} {'recall@'+str(args.k):>10} {'MRR@'+str(args.k):>8}")
+        for mode, m in quality.items():
+            print(f"  {mode:<11} {m[f'ndcg@{args.k}']:>8.4f} {m[f'recall@{args.k}']:>10.4f} {m[f'mrr@{args.k}']:>8.4f}")
+        unstable = {m: len(s["unstable_query_ids"]) for m, s in quality.items() if s["unstable_query_ids"]}
+        if unstable:
+            print(f"  NOTE: rankings changed on re-run for {unstable}")
+    if latency:
+        print(f"\nLATENCY  ({args.latency_queries} held-out queries per mode; p50 with 95% CI, p95, in ms)")
+        print(f"  {'mode':<11} {'cold p50':>9} {'95% CI':>15} {'cold p95':>9} {'cached p50':>11} {'speedup':>8}")
+        for mode, m in latency.items():
+            c, w = m["cold"], m["warm"]
+            ci = f"[{c['p50_ci_low_ms']:.0f}, {c['p50_ci_high_ms']:.0f}]"
+            print(f"  {mode:<11} {c['p50_ms']:>9.0f} {ci:>15} {c['p95_ms']:>9.0f} {w['p50_ms']:>11.0f} "
+                  f"{m['cache_speedup_p50']:>7.1f}x")
     print(f"\nartifacts written to {out_dir}")
     return 0
 

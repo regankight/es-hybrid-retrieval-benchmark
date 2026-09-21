@@ -7,9 +7,9 @@ import json
 import shutil
 import urllib.request
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 SCIFACT_URL = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip"
 SCIFACT_MD5 = "5f7d1de60b170fc8027bb7898e2efca1"
@@ -43,6 +43,8 @@ class Dataset:
     corpus: list[Document]
     queries: list[Query]
     qrels: Qrels
+    # Real queries that are never scored, kept for latency measurement (see latency.py).
+    heldout: list[Query] = field(default_factory=list)
 
 
 def _md5(path: Path) -> str:
@@ -137,7 +139,32 @@ def load_queries(root: Path, qrels: Qrels) -> list[Query]:
     ]
 
 
+def load_heldout_queries(root: Path, scored: Sequence[Query], qrels: Qrels) -> list[Query]:
+    """Real queries that are never scored, for measuring latency.
+
+    Excludes anything judged in the chosen split, and any text that also appears among the
+    scored queries, so an embedding cached during a quality run can never leak into a
+    latency measurement. De-duplicated by text for the same reason.
+    """
+    banned = {q.text for q in scored}
+    seen: set[str] = set()
+    heldout: list[Query] = []
+    for row in _read_jsonl(root / "queries.jsonl"):
+        query_id, text = str(row["_id"]), row["text"]
+        if query_id in qrels or text in banned or text in seen:
+            continue
+        seen.add(text)
+        heldout.append(Query(id=query_id, text=text))
+    return heldout
+
+
 def load_scifact(data_dir: str | Path, split: str = "test", **kwargs) -> Dataset:
     root = ensure_scifact(data_dir, **kwargs)
     qrels = load_qrels(root, split)
-    return Dataset(corpus=load_corpus(root), queries=load_queries(root, qrels), qrels=qrels)
+    queries = load_queries(root, qrels)
+    return Dataset(
+        corpus=load_corpus(root),
+        queries=queries,
+        qrels=qrels,
+        heldout=load_heldout_queries(root, queries, qrels),
+    )

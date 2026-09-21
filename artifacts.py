@@ -5,18 +5,21 @@ of the format: the trial license behind the ML models is temporary, so the resul
 stay checkable after Elasticsearch is gone.
 
 Layout of one run:  artifacts/<tag>/
-    manifest.json      what was run, on what, with which code (written by the CLI)
-    index.json         the index's mappings and settings as Elasticsearch reported them
-    metrics.json       per-mode quality and latency summaries
-    runs/<mode>.json   per-query rankings and timings: the source of truth
+    manifest.json        what was run, on what, with which code (written by the CLI)
+    index.json           the index's mappings and settings as Elasticsearch reported them
+    metrics.json         per-mode retrieval quality (nDCG, recall, MRR)
+    rankings/<mode>.json ranked document ids per scored query: the source of truth for quality
+    latency.json         per-mode latency summaries, cold and cached
+    latency/<mode>.json  raw per-query timings behind those summaries
+
+Quality and latency live in separate files on purpose: latency measured during a quality
+run is distorted by Elasticsearch's query-embedding cache, so it is never recorded there.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
-
-from retrieval import SearchRun
+from typing import Any, Mapping, Sequence
 
 
 def write_json(run_dir: Path, name: str, payload: Any) -> None:
@@ -30,24 +33,26 @@ def read_json(run_dir: Path, name: str) -> Any:
     return json.loads((Path(run_dir) / name).read_text(encoding="utf-8"))
 
 
-def write_runs(run_dir: Path, mode: str, runs: list[SearchRun]) -> None:
+def write_rankings(run_dir: Path, mode: str, rankings: Mapping[str, Sequence[str]]) -> None:
     payload = {
         "mode": mode,
-        "queries": {
-            run.query_id: {"ranked": run.ranked_ids, "took_ms": run.took_ms, "wall_ms": run.wall_ms}
-            for run in runs
-        },
+        "queries": {query_id: {"ranked": list(ranked)} for query_id, ranked in rankings.items()},
     }
-    write_json(run_dir, f"runs/{mode}.json", payload)
+    write_json(run_dir, f"rankings/{mode}.json", payload)
 
 
-def read_runs(run_dir: Path, mode: str) -> dict[str, SearchRun]:
-    payload = read_json(run_dir, f"runs/{mode}.json")
-    return {
-        query_id: SearchRun(query_id, row["ranked"], row["took_ms"], row["wall_ms"])
-        for query_id, row in payload["queries"].items()
-    }
+def read_rankings(run_dir: Path, mode: str) -> dict[str, list[str]]:
+    payload = read_json(run_dir, f"rankings/{mode}.json")
+    return {query_id: row["ranked"] for query_id, row in payload["queries"].items()}
 
 
 def list_modes(run_dir: Path) -> list[str]:
-    return sorted(p.stem for p in (Path(run_dir) / "runs").glob("*.json"))
+    return sorted(p.stem for p in (Path(run_dir) / "rankings").glob("*.json"))
+
+
+def write_latency(run_dir: Path, mode: str, payload: Mapping[str, Any]) -> None:
+    write_json(run_dir, f"latency/{mode}.json", {"mode": mode, **payload})
+
+
+def read_latency(run_dir: Path, mode: str) -> dict[str, Any]:
+    return read_json(run_dir, f"latency/{mode}.json")

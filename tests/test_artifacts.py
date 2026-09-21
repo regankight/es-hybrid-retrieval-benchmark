@@ -2,14 +2,27 @@ import json
 
 import pytest
 
-from artifacts import list_modes, read_json, read_runs, write_json, write_runs
-from retrieval import SearchRun
+from artifacts import (
+    list_modes,
+    read_json,
+    read_latency,
+    read_rankings,
+    write_json,
+    write_latency,
+    write_rankings,
+)
 
 
-def test_runs_round_trip_exactly(tmp_path):
-    runs = [SearchRun("1", ["a", "b"], 12.0, 15.5), SearchRun("2", [], 3.0, 4.0)]
-    write_runs(tmp_path, "bm25", runs)
-    assert read_runs(tmp_path, "bm25") == {r.query_id: r for r in runs}
+def test_rankings_round_trip_exactly(tmp_path):
+    rankings = {"1": ["a", "b"], "2": []}
+    write_rankings(tmp_path, "bm25", rankings)
+    assert read_rankings(tmp_path, "bm25") == rankings
+
+
+def test_a_rankings_file_holds_no_timings_so_flattered_latency_cannot_be_read_from_it(tmp_path):
+    write_rankings(tmp_path, "bm25", {"1": ["a"]})
+    text = (tmp_path / "rankings" / "bm25.json").read_text()
+    assert "ms" not in text and "took" not in text and "wall" not in text
 
 
 def test_files_are_sorted_and_end_with_a_newline_so_diffs_stay_clean(tmp_path):
@@ -25,15 +38,23 @@ def test_write_creates_nested_directories(tmp_path):
 
 def test_list_modes_reports_what_was_written_in_order(tmp_path):
     for mode in ("rrf", "bm25"):
-        write_runs(tmp_path, mode, [SearchRun("1", ["a"], 1.0, 1.0)])
+        write_rankings(tmp_path, mode, {"1": ["a"]})
     assert list_modes(tmp_path) == ["bm25", "rrf"]
 
 
-def test_a_run_file_records_its_own_mode(tmp_path):
-    write_runs(tmp_path, "semantic", [SearchRun("1", ["a"], 1.0, 1.0)])
-    assert json.loads((tmp_path / "runs" / "semantic.json").read_text())["mode"] == "semantic"
+def test_a_rankings_file_records_its_own_mode(tmp_path):
+    write_rankings(tmp_path, "semantic", {"1": ["a"]})
+    assert json.loads((tmp_path / "rankings" / "semantic.json").read_text())["mode"] == "semantic"
+
+
+def test_latency_round_trips_and_lives_apart_from_rankings(tmp_path):
+    payload = {"slice_query_ids": ["h1"], "cold": {"wall_ms": [90.0]}, "warm": {"wall_ms": [2.0]}}
+    write_latency(tmp_path, "semantic", payload)
+    assert read_latency(tmp_path, "semantic") == {"mode": "semantic", **payload}
+    assert (tmp_path / "latency" / "semantic.json").exists()
+    assert not (tmp_path / "rankings").exists()
 
 
 def test_reading_a_mode_that_was_never_written_fails_loudly(tmp_path):
     with pytest.raises(FileNotFoundError):
-        read_runs(tmp_path, "bm25")
+        read_rankings(tmp_path, "bm25")

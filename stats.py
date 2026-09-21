@@ -9,8 +9,9 @@ nothing about variation from other sources (a different corpus, model version, o
 from __future__ import annotations
 
 import random
+import statistics
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from metrics import percentile
 
@@ -25,19 +26,32 @@ class Interval:
         return self.low > 0 or self.high < 0
 
 
-def bootstrap_mean(
-    values: Sequence[float], *, resamples: int = 10_000, seed: int = 0, confidence: float = 0.95
+def bootstrap_statistic(
+    values: Sequence[float],
+    statistic: Callable[[Sequence[float]], float],
+    *,
+    resamples: int = 10_000,
+    seed: int = 0,
+    confidence: float = 0.95,
 ) -> Interval:
-    """Percentile-bootstrap interval for the mean. Deterministic for a given seed."""
+    """Percentile-bootstrap interval for any statistic. Deterministic for a given seed."""
     if not values:
         raise ValueError("cannot bootstrap an empty sequence")
     if not 0 < confidence < 1:
         raise ValueError("confidence must be strictly between 0 and 1")
     n = len(values)
     rng = random.Random(seed)
-    means = [sum(rng.choices(values, k=n)) / n for _ in range(resamples)]
+    draws = [statistic(rng.choices(values, k=n)) for _ in range(resamples)]
     tail = (1 - confidence) / 2 * 100
-    return Interval(sum(values) / n, percentile(means, tail), percentile(means, 100 - tail))
+    return Interval(statistic(values), percentile(draws, tail), percentile(draws, 100 - tail))
+
+
+def bootstrap_mean(values: Sequence[float], **kwargs) -> Interval:
+    return bootstrap_statistic(values, lambda xs: sum(xs) / len(xs), **kwargs)
+
+
+def bootstrap_median(values: Sequence[float], **kwargs) -> Interval:
+    return bootstrap_statistic(values, statistics.median, **kwargs)
 
 
 def paired_difference(

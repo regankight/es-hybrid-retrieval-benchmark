@@ -16,6 +16,9 @@ QUERIES = (
     '{"_id": "10", "text": "query one"}\n'
     '{"_id": "11", "text": "query two"}\n'
     '{"_id": "12", "text": "train-only query"}\n'
+    '{"_id": "13", "text": "query one"}\n'  # same text as scored query 10
+    '{"_id": "14", "text": "train-only query"}\n'  # duplicate of 12's text
+    '{"_id": "15", "text": "another unscored query"}\n'
 )
 QRELS_TEST = "query-id\tcorpus-id\tscore\n10\t1\t1\n10\t2\t0\n11\t3\t1\n"
 
@@ -103,3 +106,11 @@ def test_corpus_ids_are_strings_and_missing_title_defaults_to_empty(archive, tmp
     ds = load_scifact(tmp_path / "data", md5=_md5(archive), fetch=FakeFetch(archive))
     assert [d.id for d in ds.corpus] == ["1", "2", "3"]
     assert ds.corpus[2].title == ""
+
+
+def test_heldout_queries_are_unscored_unique_and_never_share_text_with_a_scored_query(archive, tmp_path):
+    ds = load_scifact(tmp_path / "data", md5=_md5(archive), fetch=FakeFetch(archive))
+    assert [q.id for q in ds.heldout] == ["12", "15"]
+    scored_texts = {q.text for q in ds.queries}
+    assert not scored_texts & {q.text for q in ds.heldout}  # else a cached embedding could leak
+    assert len({q.text for q in ds.heldout}) == len(ds.heldout)
