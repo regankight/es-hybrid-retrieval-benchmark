@@ -1,0 +1,70 @@
+{
+  "code": {
+    "commit": "fa818df5a28cd89680789614cbc6f32587e36af7",
+    "dirty": false
+  },
+  "dataset": {
+    "archive_md5": "5f7d1de60b170fc8027bb7898e2efca1",
+    "corpus_documents": 5183,
+    "heldout_pool": 805,
+    "name": "BEIR/SciFact",
+    "scored_queries": 300,
+    "source": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip",
+    "split": "test"
+  },
+  "environment": {
+    "cpu_count": 10,
+    "elasticsearch_client": "9.5.1",
+    "elasticsearch_server": "9.5.2",
+    "license": {
+      "expiry_date": "2026-10-01T13:44:13.738Z",
+      "status": "active",
+      "type": "trial"
+    },
+    "machine": "arm64",
+    "node": {
+      "allocated_processors": 10,
+      "arch": "aarch64",
+      "jvm_heap_max_bytes": 2147483648,
+      "jvm_version": "26.0.2",
+      "memory_total_bytes": 8319504384,
+      "os": "Red Hat Enterprise Linux 9.8 (Plow)"
+    },
+    "platform": "macOS-27.0-arm64-arm-64bit",
+    "python": "3.12.14"
+  },
+  "finished_utc": "2026-09-21T16:25:50+00:00",
+  "index": "scifact-benchmark-e5",
+  "index_documents": 5183,
+  "latency_settings": {
+    "per_mode": 200,
+    "warmup": 5
+  },
+  "models": {
+    "rerank": ".rerank-v1-elasticsearch",
+    "semantic": ".multilingual-e5-small-elasticsearch"
+  },
+  "modes": [
+    "bm25",
+    "semantic",
+    "rrf"
+  ],
+  "note": "release run 1. Elasticsearch restarted immediately before the run to clear its query-embedding cache, then settled idle (ES container ~4% CPU, all model queues empty). Mac ~88% idle, on battery (Low Power Mode off). Reranker excluded: infeasible on this cluster, see README. ELSER not evaluated.",
+  "phases": [
+    "quality",
+    "latency"
+  ],
+  "settings": {
+    "attempts": 3,
+    "depth": 20,
+    "k": 10,
+    "rank_constant": 60,
+    "rerank_field": "semantic",
+    "retry_delay": 5.0,
+    "stability_sample": 100,
+    "warmup": 5,
+    "window": 20
+  },
+  "started_utc": "2026-09-21T16:24:38+00:00",
+  "tag": "release-1"
+}

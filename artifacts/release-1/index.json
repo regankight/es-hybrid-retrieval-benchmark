@@ -1,0 +1,45 @@
+{
+  "scifact-benchmark-e5": {
+    "aliases": {},
+    "mappings": {
+      "properties": {
+        "semantic": {
+          "inference_id": ".multilingual-e5-small-elasticsearch",
+          "model_settings": {
+            "dimensions": 384,
+            "element_type": "float",
+            "service": "elasticsearch",
+            "similarity": "cosine",
+            "task_type": "text_embedding"
+          },
+          "type": "semantic_text"
+        },
+        "text": {
+          "type": "text"
+        },
+        "title": {
+          "type": "text"
+        }
+      }
+    },
+    "settings": {
+      "index": {
+        "creation_date": "1789987150162",
+        "number_of_replicas": "0",
+        "number_of_shards": "1",
+        "provided_name": "scifact-benchmark-e5",
+        "routing": {
+          "allocation": {
+            "include": {
+              "_tier_preference": "data_content"
+            }
+          }
+        },
+        "uuid": "5pAQ5Y3bTnKuDtFOBqUxTg",
+        "version": {
+          "created": "9111000"
+        }
+      }
+    }
+  }
+}
