@@ -51,8 +51,9 @@ def index_definition(model: SemanticModel) -> dict:
             "properties": {
                 "title": {"type": "text"},
                 "text": {"type": "text"},
-                # Written directly (title + abstract), not via copy_to: two copy_to
-                # sources would arrive as two separate values with separate embeddings.
+                # Written directly (title + abstract) so exactly what gets embedded is
+                # explicit. copy_to from two fields would send two values instead, and
+                # how those are embedded was not tested here.
                 "semantic": {"type": "semantic_text", "inference_id": model.inference_id},
             }
         },

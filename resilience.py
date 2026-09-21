@@ -57,6 +57,7 @@ def wait_for_inference(
     client,
     inference_id: str,
     *,
+    query: str | None = None,
     deadline: float = 900.0,
     poll: float = 5.0,
     sleep: Callable[[float], None] = time.sleep,
@@ -67,15 +68,16 @@ def wait_for_inference(
     Polling deployment stats is not enough. With adaptive allocations a model sits at
     zero allocations until traffic arrives, so a 'started' deployment says nothing about
     whether the next request will succeed. A tiny real request both wakes the model and
-    proves it works.
+    proves it works. Rerank endpoints also require a `query` to compare the input against.
     """
     start = clock()
     last: Exception | None = None
+    request = {"inference_id": inference_id, "input": "warm up", "timeout": "60s"}
+    if query is not None:
+        request["query"] = query
     while True:
         try:
-            client.options(request_timeout=120).inference.inference(
-                inference_id=inference_id, input="warm up", timeout="60s"
-            )
+            client.options(request_timeout=120).inference.inference(**request)
             return clock() - start
         except Exception as exc:
             if not is_retryable(exc):

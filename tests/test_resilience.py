@@ -64,6 +64,16 @@ def test_wait_for_inference_survives_cold_start_timeouts():
     assert waited == 10.0
 
 
+def test_wait_for_inference_sends_a_query_only_when_given_one():
+    # Rerank endpoints reject a request that has no query, embedding endpoints don't need one.
+    clock = FakeClock()
+    embedding, rerank = FakeInferenceClient(), FakeInferenceClient()
+    wait_for_inference(embedding, "e5", sleep=clock.sleep, clock=clock)
+    wait_for_inference(rerank, "reranker", query="warm-up query", sleep=clock.sleep, clock=clock)
+    assert "query" not in embedding.inference.last_kwargs
+    assert rerank.inference.last_kwargs["query"] == "warm-up query"
+
+
 def test_wait_for_inference_raises_model_not_ready_at_the_deadline():
     clock = FakeClock()
     client = FakeInferenceClient([api_error(408)] * 100)

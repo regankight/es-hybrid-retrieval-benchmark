@@ -74,9 +74,11 @@ class FakeInference:
     def __init__(self, outcomes):
         self.outcomes = list(outcomes)  # exceptions are raised, anything else succeeds
         self.calls = 0
+        self.last_kwargs: dict = {}
 
     def inference(self, **kwargs):
         self.calls += 1
+        self.last_kwargs = kwargs
         outcome = self.outcomes.pop(0) if self.outcomes else None
         if isinstance(outcome, Exception):
             raise outcome
@@ -104,3 +106,17 @@ class FakeClock:
     def sleep(self, seconds):
         self.sleeps.append(seconds)
         self.now += seconds
+
+
+class FakeSearchClient:
+    def __init__(self, hits=("a", "b"), took=7):
+        self.calls: list[dict] = []
+        self.errors: list[Exception] = []  # raised by successive search calls, in order
+        self.hits = hits
+        self.took = took
+
+    def search(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.errors:
+            raise self.errors.pop(0)
+        return {"took": self.took, "hits": {"hits": [{"_id": h} for h in self.hits]}}

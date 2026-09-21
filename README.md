@@ -7,8 +7,9 @@ answer to "is reranking worth it?" is a measured tradeoff instead of a demo.
 
 This is a reference implementation and benchmark, not a production service.
 
-**Status: work in progress.** The dataset loader and configuration are done and tested.
-There are no benchmark results yet, and none are claimed here.
+**Status: work in progress.** The dataset loader, resumable ingestion, the four retrieval
+modes' query builders, and the metrics are done and unit-tested. Ingesting the full corpus
+and every benchmark run are still to do. There are no results yet, and none are claimed here.
 
 ## Dataset
 
@@ -55,6 +56,53 @@ tracebacks, and test output. `.env.example` is committed; `.env` is gitignored.
 **Python 3.12 is the target.** The optional LangChain integration's published support range tops
 out at 3.12 (per its PyPI page at time of writing), so the project targets 3.12 even though
 newer interpreters exist.
+
+**One index per semantic model, with one shard and no replicas.** Inference runs at index
+time and is slow on a laptop (measured on a 10-core Apple-silicon Mac, Elasticsearch in
+Docker: ELSER about 0.45 documents per second, dense `multilingual-e5-small` about 1.2), so
+each model gets its own index. Ingesting one never re-runs the other, and either can be
+rebuilt alone. One shard on one node keeps BM25's term statistics identical across indices
+that hold the same documents.
+
+**The semantic field is written directly as "title. abstract" instead of through
+`copy_to`.** It makes exactly what gets embedded explicit and matches the usual
+title-plus-abstract convention for this dataset. I did not test the `copy_to` alternative,
+so I make no claim about how it would behave.
+
+**Ingestion is resumable and idempotent, and only transient failures are retried.**
+Documents keep the dataset's own id, so re-ingesting overwrites instead of duplicating, and
+a re-run first skips everything already indexed: an interrupted multi-hour ingestion just
+continues. Retries with exponential backoff cover timeouts, 429s, and 502/503/504s. A 400 is
+reported immediately instead of being retried. These are not hypothetical: a cold-start 408
+and a first-ever-model-import 502 both happened during development.
+
+**"Ready" means the model answered a real request.** With adaptive allocations a model sits
+at zero allocations until traffic arrives, so a `started` deployment in the stats API says
+nothing about whether the next request will succeed.
+
+**The retrieval modes share one candidate pool.** `window` is how deep each retriever looks
+for RRF and how many fused candidates the reranker re-orders, so RRF+rerank re-orders
+exactly what plain RRF ranked and the comparison isolates the reranker. Against the live
+index, a from-scratch recomputation of RRF (the sum of `1/(60 + rank)` over the BM25 and
+semantic lists) reproduced Elasticsearch's fused top 20 in the same order, with a maximum
+score difference of 2e-9. That was a sanity check on a partially built index, not a benchmark.
+
+**The reranker reads the `semantic` field (title and abstract), not `text`.** Elasticsearch
+accepts both and they rank differently. `semantic` matches what the embedding model sees.
+I have not measured which is better.
+
+**Metrics follow trec_eval conventions and evaluation is strict.** Linear gain, a
+`1/log2(rank + 1)` discount, and the cutoff applied before scoring keep numbers comparable
+with published BEIR results. A judged query that has no run raises an error instead of being
+skipped or scored zero, since either would quietly inflate the average. The implementations
+are checked against hand-computed values.
+
+**Latency is timed inside the retried call,** so backoff sleeps and failed attempts never
+leak into the figures. One caveat learned during development: rerank latency ranged from 1.8
+to 19.6 seconds across a handful of runs while ingestion was competing for CPU and the
+adaptive scaler was changing allocations (the runs also used different rerank fields, so
+this is not a controlled comparison). Latency therefore has to be measured on an otherwise
+idle machine after warm-up.
 
 ## Running the tests
 
