@@ -9,6 +9,11 @@ result can be regenerated from the artifacts committed in this repository.
 This is a reference implementation and benchmark, not a production service. The limits are
 stated in full below.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/results-dark.png">
+  <img src="docs/img/results-light.png" alt="nDCG@10 by mode: BM25 0.654, Dense 0.661, RRF hybrid 0.702, RRF + rerank 0.694, each with a 95% CI, against an oracle ceiling of 0.754" width="700">
+</picture>
+
 ## Bottom line
 
 **Recommendation: ship RRF hybrid (BM25 plus dense), and do not add an off-the-shelf reranker.**
