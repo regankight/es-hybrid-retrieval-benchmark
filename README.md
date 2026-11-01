@@ -168,7 +168,7 @@ embedding is already cached.
 | Statistics | Percentile bootstrap over queries; paired differences with win/loss/tie counts |
 | Latency | Separate phase on separate queries (below) |
 | Determinism | Rankings re-scored on a sample each run; identical across two full runs |
-| Provenance | Every run's manifest records code commit, versions, license type, and node hardware; publishing a run from a dirty working tree is refused, and so is a latency run if Elasticsearch has not restarted since an earlier run used the same held-out queries |
+| Provenance | Every run's manifest records code commit ([mapped to today's history](docs/CODE_PROVENANCE.md)), versions, license type, and node hardware; publishing a run from a dirty working tree is refused, and so is a latency run if Elasticsearch has not restarted since an earlier run used the same held-out queries |
 
 **Why latency has its own phase.** Each mode is timed on its own disjoint slice of real
 held-out queries (805 available, none scored, none sharing text with a scored query), so every
