@@ -1,5 +1,7 @@
 # Hybrid retrieval on Elasticsearch: do fusion and reranking actually pay off?
 
+[![tests](https://github.com/regankight/es-hybrid-retrieval-benchmark/actions/workflows/tests.yml/badge.svg)](https://github.com/regankight/es-hybrid-retrieval-benchmark/actions/workflows/tests.yml)
+
 A measured comparison of four retrieval strategies on a labeled scientific-retrieval dataset
 (BEIR SciFact): keyword search (BM25), dense search, hybrid search fused with Reciprocal Rank
 Fusion (RRF), and hybrid plus a cross-encoder reranker. Every number below has a confidence
